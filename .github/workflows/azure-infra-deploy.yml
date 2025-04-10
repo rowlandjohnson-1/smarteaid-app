@@ -9,10 +9,10 @@ on:
       - 'infra/**' # Only run automatically if files in infra/ change
   workflow_dispatch: # Allows manual triggering anytime
 
-# Permissions needed (keeping id-token for now)
+# Permissions needed for runner environment
 permissions:
-  id-token: write
-  contents: read
+  id-token: write # Potentially needed by Azure actions internally
+  contents: read  # To checkout the code
 
 jobs:
   deploy_infrastructure:
@@ -31,21 +31,21 @@ jobs:
         # Use the 'creds' input method, passing a JSON string with secrets:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
 
-        # Keep or remove based on whether you need PowerShell Az module later
+        # Keep false unless you specifically need PowerShell Az module later
         enable-AzPSSession: false
 
-    # Step 3: Install Bicep CLI - Ensures Bicep tooling is available on the runner
-    # (May be redundant with bicep-deploy-action, but keeping for safety first)
+    # Step 3: Install Bicep CLI - Explicitly ensure Bicep tooling is available
     - name: Install Bicep CLI
       run: az bicep install
 
     # Step 4: Deploy Bicep File using the dedicated Bicep deploy action
     - name: Deploy Bicep File using bicep-deploy-action
-      uses: azure/bicep-deploy-action@v1 # Use the dedicated Bicep action
+      uses: azure/bicep-deploy-action@v1
       with:
         # Deployment target is the subscription
         deploymentScope: subscription
-        # Location for the deployment metadata itself
+        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # Specify subscription ID for clarity
+        # Location for the Azure deployment metadata itself
         location: 'uksouth'
         # Path to your main Bicep template file within the repository
         bicepFilePath: ./infra/main.bicep
@@ -53,4 +53,4 @@ jobs:
         parametersFilePath: ./infra/main.bicepparam
         # A name for this specific deployment instance in Azure history
         deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
-        # failOnStdErr is not typically needed/used with this action
+        # failOnStdErr is not typically needed/used with azure/bicep-deploy-action
