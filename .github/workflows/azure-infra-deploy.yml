@@ -1,52 +1,53 @@
 name: Deploy Azure Infrastructure
 
-# Trigger workflow on pushes to the main branch targeting the infra path
+# Trigger workflow on pushes to the main branch targeting the infra path,
+# or allow manual triggering from the Actions tab
 on:
   push:
     branches: [ main ]
     paths:
-      - 'infra/**' # Only run if files in infra/ change
-  workflow_dispatch: # Allows manual triggering from GitHub UI
+      - 'infra/**' # Only run automatically if files in infra/ change
+  workflow_dispatch: # Allows manual triggering anytime
 
-# Permissions needed for Azure login
+# Permissions needed (keeping id-token for now, though may not be needed with creds)
 permissions:
-  id-token: write # Required for Azure login
-  contents: read # Required to checkout the code
+  id-token: write
+  contents: read
 
 jobs:
   deploy_infrastructure:
     name: Deploy Bicep Infrastructure
-    runs-on: ubuntu-latest # Use a standard Linux runner
+    runs-on: ubuntu-latest # Use a standard Linux runner environment
 
     steps:
+    # Step 1: Check out the repository code so the workflow can access it
     - name: Checkout Code
-      uses: actions/checkout@v4 # Action to get your repository code onto the runner
+      uses: actions/checkout@v4
 
+    # Step 2: Log in to Azure using the Service Principal credentials stored in secrets via the 'creds' input
     - name: Login to Azure
       uses: azure/login@v1
       with:
-        # Use the secrets you configured in GitHub repository settings
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        # This uses the client secret you generated
-        client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-        enable-AzPSSession: false # Set to true only if using PowerShell tasks later
-        auth-type: SERVICE_PRINCIPAL
+        # Use the 'creds' input method, passing a JSON string with secrets:
+        creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
 
+        # Keep or remove based on whether you need PowerShell Az module later
+        enable-AzPSSession: false
+
+    # Step 3: Deploy the Bicep infrastructure template
     - name: Deploy Bicep File
       uses: azure/arm-deploy@v1
       with:
-        # Deploy to the subscription scope as RG is defined in Bicep
+        # Specify deployment scope as 'subscription' because the RG is defined within the Bicep file
         scope: subscription
         subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        # Location for the deployment metadata (can be same as resources)
+        # Location for the Azure deployment metadata (can be same as resources)
         region: 'uksouth'
-        # Path to your main Bicep file within the repository
+        # Path to the main Bicep template file within your repository
         template: ./infra/main.bicep
-        # Path to your Bicep parameters file within the repository
+        # Path to the Bicep parameters file within your repository
         parameters: ./infra/main.bicepparam
-        # A name for the deployment record in Azure
+        # A name for this specific deployment instance in Azure history
         deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
-        # Required setting for subscription scope Bicep deployments with this action
+        # Must be false for subscription scope Bicep deployment with azure/arm-deploy@v1
         failOnStdErr: false
