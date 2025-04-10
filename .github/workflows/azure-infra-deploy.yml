@@ -27,17 +27,30 @@ jobs:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
         # Keep false unless you specifically need PowerShell Az module later
         enable-AzPSSession: false
-    # Step 3: Install Bicep CLI - Explicitly ensure Bicep tooling is available
+    # Step 3: Install Bicep CLI - More robust installation
     - name: Install Bicep CLI
-      run: az bicep install
-    # Step 4: Deploy Bicep File using ARM deploy action (replacing bicep-deploy-action)
+      run: |
+        # Download the Bicep CLI installer
+        curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+        # Make it executable
+        chmod +x ./bicep
+        # Move to local bin directory
+        sudo mv ./bicep /usr/local/bin/bicep
+        # Verify installation
+        bicep --version
+    # Step 4: Deploy Bicep File using az CLI directly for more control
     - name: Deploy Bicep File
-      uses: azure/arm-deploy@v1
-      with:
-        # Deployment target is the subscription
-        scope: subscription
-        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        region: 'uksouth'
-        template: ./infra/main.bicep
-        parameters: ./infra/main.bicepparam
-        deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
+      run: |
+        # Validate the template first
+        az deployment sub validate \
+          --location uksouth \
+          --template-file ./infra/main.bicep \
+          --parameters ./infra/main.bicepparam \
+          --name deploy-smarteaid-infra-${{ github.run_number }}
+          
+        # Then create the actual deployment
+        az deployment sub create \
+          --location uksouth \
+          --template-file ./infra/main.bicep \
+          --parameters ./infra/main.bicepparam \
+          --name deploy-smarteaid-infra-${{ github.run_number }}
