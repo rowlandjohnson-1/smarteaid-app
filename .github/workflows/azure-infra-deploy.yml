@@ -27,28 +27,41 @@ jobs:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
         # Keep false unless you specifically need PowerShell Az module later
         enable-AzPSSession: false
-    # Step 3: Install Bicep CLI - More robust installation
+    # Step 3: Install Bicep CLI directly from Microsoft's instructions
     - name: Install Bicep CLI
       run: |
-        # Download the Bicep CLI installer
-        curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
-        # Make it executable
-        chmod +x ./bicep
-        # Move to local bin directory
-        sudo mv ./bicep /usr/local/bin/bicep
-        # Verify installation
-        bicep --version
-    # Step 4: Deploy Bicep File using az CLI directly for more control
+        # Make sure Azure CLI is updated
+        az upgrade --yes
+        
+        # Install Bicep using the official Azure CLI command
+        az bicep install
+        
+        # Create the expected directory if it doesn't exist
+        mkdir -p /home/runner/.azure/bin
+        
+        # Check if bicep exists in another location and link it to where Azure expects it
+        if [ -f "/usr/local/bin/bicep" ]; then
+          echo "Found bicep in /usr/local/bin, linking to .azure/bin"
+          ln -s /usr/local/bin/bicep /home/runner/.azure/bin/bicep
+        fi
+        
+        # Make sure bicep is executable
+        chmod +x /home/runner/.azure/bin/bicep 2>/dev/null || true
+        
+        # Verify Bicep installation and path
+        which bicep || echo "Bicep not found in PATH"
+        ls -la /home/runner/.azure/bin || echo "Directory doesn't exist"
+        
+        # Check Azure CLI can find Bicep
+        az bicep version || echo "Azure CLI can't find Bicep"
+    
+    # Step 4: Deploy Bicep File directly with az CLI, avoiding GitHub Actions
     - name: Deploy Bicep File
       run: |
-        # Validate the template first
-        az deployment sub validate \
-          --location uksouth \
-          --template-file ./infra/main.bicep \
-          --parameters ./infra/main.bicepparam \
-          --name deploy-smarteaid-infra-${{ github.run_number }}
-          
-        # Then create the actual deployment
+        # Export PATH to include .azure/bin
+        export PATH=$PATH:/home/runner/.azure/bin
+        
+        # Execute deployment with explicit locations
         az deployment sub create \
           --location uksouth \
           --template-file ./infra/main.bicep \
