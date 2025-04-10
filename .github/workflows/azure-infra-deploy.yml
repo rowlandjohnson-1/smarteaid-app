@@ -31,6 +31,7 @@ jobs:
         # This uses the client secret you generated
         client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
         enable-AzPSSession: false # Set to true only if using PowerShell tasks later
+        auth-type: SERVICE_PRINCIPAL
 
     - name: Deploy Bicep File
       uses: azure/arm-deploy@v1
