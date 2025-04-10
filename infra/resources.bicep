@@ -14,16 +14,22 @@ param location string
 param locationShort string
 
 // --- Variables ---
-// Generate a unique seed based on the subscription ID (since resourceGroup().id isn't available at start)
+// Generate a unique seed based on the subscription ID
 var uniqueSeed = uniqueString(subscription().subscriptionId)
-// Use a shorter unique string (first 8 characters) for storage account
+// Use a shorter unique string (first 8 characters) for storage account and key vault
 var shortUniqueSeed = take(uniqueSeed, 8)
-var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${purpose}-${environment}-${uniqueSeed}'
+
+// Key Vault - shortened to fit 24 character limit
+var keyVaultName = 'kv${companyPrefix}${locationShort}${environment}${shortUniqueSeed}'
+
 // Storage account name - shortened to fit 24 character limit
 var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${environment}${shortUniqueSeed}')
-var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}-${uniqueSeed}'
+
+// Cosmos DB name
+var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}-${shortUniqueSeed}'
+
+// Container Apps Environment name
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
-// var logAnalyticsWorkspaceName = 'log-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Commented out to avoid warning
 
 // Key Vault for storing secrets
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -40,9 +46,9 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
       name: 'standard'
     }
     tenantId: subscription().tenantId
-    enableRbacAuthorization: true // Use RBAC for permissions
-    enablePurgeProtection: true // Required by organizational policy
-    softDeleteRetentionInDays: 90 // Required with purge protection
+    enableRbacAuthorization: true
+    enablePurgeProtection: true
+    softDeleteRetentionInDays: 90
   }
 }
 
@@ -107,16 +113,10 @@ resource cae 'Microsoft.App/managedEnvironments@2023-05-01' = {
     application: 'SmartEducator AI Detector'
     purpose: purpose
   }
-  // Uncomment and configure if using custom Log Analytics
-  // properties: {
-  //   appLogsConfiguration: {
-  //     destination: 'log-analytics'
-  //     logAnalyticsConfiguration: {
-  //       customerId: logAnalyticsWorkspace.properties.customerId
-  //       sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
-  //     }
-  //   }
-  // }
+  properties: {
+    // Empty properties object to satisfy the requirement
+    // This can be expanded later with specific configurations
+  }
 }
 
 // --- Outputs ---
