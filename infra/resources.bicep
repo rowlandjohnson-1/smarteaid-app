@@ -16,12 +16,14 @@ param locationShort string
 // --- Variables ---
 // Generate a unique seed based on the subscription ID (since resourceGroup().id isn't available at start)
 var uniqueSeed = uniqueString(subscription().subscriptionId)
+// Use a shorter unique string (first 8 characters) for storage account
+var shortUniqueSeed = take(uniqueSeed, 8)
 var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${purpose}-${environment}-${uniqueSeed}'
-// Storage account names must be 3-24 chars, lowercase alphanumeric only
-var storageAccountName = toLower('st${companyPrefix}${locationShort}${purpose}${environment}${uniqueSeed}')
+// Storage account name - shortened to fit 24 character limit
+var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${environment}${shortUniqueSeed}')
 var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}-${uniqueSeed}'
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
-var logAnalyticsWorkspaceName = 'log-${companyPrefix}-${locationShort}-${purpose}-${environment}'
+// var logAnalyticsWorkspaceName = 'log-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Commented out to avoid warning
 
 // Key Vault for storing secrets
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
