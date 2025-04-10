@@ -1,0 +1,51 @@
+name: Deploy Azure Infrastructure
+
+# Trigger workflow on pushes to the main branch targeting the infra path
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'infra/**' # Only run if files in infra/ change
+  workflow_dispatch: # Allows manual triggering from GitHub UI
+
+# Permissions needed for Azure login
+permissions:
+  id-token: write # Required for OIDC login (if used later)
+  contents: read # Required to checkout the code
+
+jobs:
+  deploy_infrastructure:
+    name: Deploy Bicep Infrastructure
+    runs-on: ubuntu-latest # Use a standard Linux runner
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4 # Action to get your repository code onto the runner
+
+    - name: Login to Azure
+      uses: azure/login@v1
+      with:
+        # Use the secrets you configured in GitHub repository settings
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        # This uses the client secret you generated
+        client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+        enable-AzPSSession: false # Set to true only if using PowerShell tasks later
+
+    - name: Deploy Bicep File
+      uses: azure/arm-deploy@v1
+      with:
+        # Deploy to the subscription scope as RG is defined in Bicep
+        scope: subscription
+        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        # Location for the deployment metadata (can be same as resources)
+        region: 'uksouth'
+        # Path to your main Bicep file within the repository
+        template: ./infra/main.bicep
+        # Path to your Bicep parameters file within the repository
+        parameters: ./infra/main.bicepparam
+        # A name for the deployment record in Azure
+        deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
+        # Required setting for subscription scope Bicep deployments with this action
+        failOnStdErr: false
