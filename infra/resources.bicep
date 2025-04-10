@@ -39,6 +39,8 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true // Use RBAC for permissions
+    enablePurgeProtection: true // Required by organizational policy
+    softDeleteRetentionInDays: 90 // Required with purge protection
   }
 }
 
