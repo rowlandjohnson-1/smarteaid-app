@@ -10,7 +10,6 @@ on:
 
 # Permissions needed for Azure login
 permissions:
-  id-token: write # Required for OIDC login (if used later)
   contents: read # Required to checkout the code
 
 jobs:
