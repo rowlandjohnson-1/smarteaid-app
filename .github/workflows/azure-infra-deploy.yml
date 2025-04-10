@@ -35,23 +35,22 @@ jobs:
         enable-AzPSSession: false
 
     # Step 3: Install Bicep CLI - Ensures Bicep tooling is available on the runner
+    # (May be redundant with bicep-deploy-action, but keeping for safety first)
     - name: Install Bicep CLI
       run: az bicep install
 
-    # Step 4: Deploy the Bicep infrastructure template
-    - name: Deploy Bicep File
-      uses: azure/arm-deploy@v1
+    # Step 4: Deploy Bicep File using the dedicated Bicep deploy action
+    - name: Deploy Bicep File using bicep-deploy-action
+      uses: azure/bicep-deploy-action@v1 # Use the dedicated Bicep action
       with:
-        # Specify deployment scope as 'subscription' because the RG is defined within the Bicep file
-        scope: subscription
-        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        # Location for the Azure deployment metadata (can be same as resources)
-        region: 'uksouth'
-        # Path to the main Bicep template file within your repository
-        template: ./infra/main.bicep
-        # Path to the Bicep parameters file within your repository
-        parameters: ./infra/main.bicepparam
+        # Deployment target is the subscription
+        deploymentScope: subscription
+        # Location for the deployment metadata itself
+        location: 'uksouth'
+        # Path to your main Bicep template file within the repository
+        bicepFilePath: ./infra/main.bicep
+        # Path to your Bicep parameters file within the repository
+        parametersFilePath: ./infra/main.bicepparam
         # A name for this specific deployment instance in Azure history
         deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
-        # Must be false for subscription scope Bicep deployment with azure/arm-deploy@v1
-        failOnStdErr: false
+        # failOnStdErr is not typically needed/used with this action
