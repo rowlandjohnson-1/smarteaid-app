@@ -9,7 +9,7 @@ on:
       - 'infra/**' # Only run automatically if files in infra/ change
   workflow_dispatch: # Allows manual triggering anytime
 
-# Permissions needed (keeping id-token for now, though may not be needed with creds)
+# Permissions needed (keeping id-token for now)
 permissions:
   id-token: write
   contents: read
@@ -24,7 +24,7 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # Step 2: Log in to Azure using the Service Principal credentials stored in secrets via the 'creds' input
+    # Step 2: Log in to Azure using the Service Principal credentials via the 'creds' input
     - name: Login to Azure
       uses: azure/login@v1
       with:
@@ -34,7 +34,11 @@ jobs:
         # Keep or remove based on whether you need PowerShell Az module later
         enable-AzPSSession: false
 
-    # Step 3: Deploy the Bicep infrastructure template
+    # Step 3: Install Bicep CLI - Ensures Bicep tooling is available on the runner
+    - name: Install Bicep CLI
+      run: az bicep install
+
+    # Step 4: Deploy the Bicep infrastructure template
     - name: Deploy Bicep File
       uses: azure/arm-deploy@v1
       with:
