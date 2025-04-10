@@ -1,5 +1,4 @@
 name: Deploy Azure Infrastructure
-
 # Trigger workflow on pushes to the main branch targeting the infra path,
 # or allow manual triggering from the Actions tab
 on:
@@ -8,49 +7,37 @@ on:
     paths:
       - 'infra/**' # Only run automatically if files in infra/ change
   workflow_dispatch: # Allows manual triggering anytime
-
 # Permissions needed for runner environment
 permissions:
   id-token: write # Potentially needed by Azure actions internally
   contents: read  # To checkout the code
-
 jobs:
   deploy_infrastructure:
     name: Deploy Bicep Infrastructure
     runs-on: ubuntu-latest # Use a standard Linux runner environment
-
     steps:
     # Step 1: Check out the repository code so the workflow can access it
     - name: Checkout Code
       uses: actions/checkout@v4
-
     # Step 2: Log in to Azure using the Service Principal credentials via the 'creds' input
     - name: Login to Azure
       uses: azure/login@v1
       with:
         # Use the 'creds' input method, passing a JSON string with secrets:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-
         # Keep false unless you specifically need PowerShell Az module later
         enable-AzPSSession: false
-
     # Step 3: Install Bicep CLI - Explicitly ensure Bicep tooling is available
     - name: Install Bicep CLI
       run: az bicep install
-
-    # Step 4: Deploy Bicep File using the dedicated Bicep deploy action
-    - name: Deploy Bicep File using bicep-deploy-action
-      uses: azure/bicep-deploy-action@v1
+    # Step 4: Deploy Bicep File using ARM deploy action (replacing bicep-deploy-action)
+    - name: Deploy Bicep File
+      uses: azure/arm-deploy@v1
       with:
         # Deployment target is the subscription
-        deploymentScope: subscription
-        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }} # Specify subscription ID for clarity
-        # Location for the Azure deployment metadata itself
-        location: 'uksouth'
-        # Path to your main Bicep template file within the repository
-        bicepFilePath: ./infra/main.bicep
-        # Path to your Bicep parameters file within the repository
-        parametersFilePath: ./infra/main.bicepparam
-        # A name for this specific deployment instance in Azure history
+        scope: subscription
+        subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        region: 'uksouth'
+        template: ./infra/main.bicep
+        parameters: ./infra/main.bicepparam
         deploymentName: deploy-smarteaid-infra-${{ github.run_number }}
-        # failOnStdErr is not typically needed/used with azure/bicep-deploy-action
