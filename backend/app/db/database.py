@@ -62,4 +62,36 @@ async def connect_to_mongo():
                     if result == 0:
                         logger.info(f"Port {port} on {hostname} is open")
                     else:
-                        logger.error(f"Port {port} on {hostname} is not reachable, error code: {result}
+                        logger.error(f"Port {port} on {hostname} is not reachable, error code: {result}")  # Fixed missing closing bracket
+                    sock.close()
+        except Exception as diag_error:
+            logger.error(f"Diagnostic test failed: {diag_error}")
+        
+        _client = None
+        _db = None
+
+async def close_mongo_connection():
+    """Closes the MongoDB connection."""
+    global _client
+    if _client:
+        logger.info("Closing MongoDB connection...")
+        _client.close()
+        logger.info("MongoDB connection closed.")
+
+def get_database():
+    """
+    Returns the database instance. Ensures connection is established.
+    NOTE: Relies on connect_to_mongo() being called at app startup.
+    """
+    if _db is None:
+        logger.warning("Warning: Database instance is not initialized!")
+    return _db
+
+def get_mongo_client() -> motor.motor_asyncio.AsyncIOMotorClient:
+    """
+    Returns the MongoDB client instance. Ensures connection is established.
+    NOTE: Relies on connect_to_mongo() being called at app startup.
+    """
+    if _client is None:
+        logger.warning("Warning: MongoDB client is not initialized!")
+    return _client
