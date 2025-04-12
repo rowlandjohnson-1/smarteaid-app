@@ -1,6 +1,7 @@
 # app/db/database.py
 import motor.motor_asyncio
 import logging
+import urllib.parse
 from app.core.config import MONGODB_URL, DB_NAME, PROJECT_NAME
 
 # Setup basic logging
@@ -16,58 +17,49 @@ async def connect_to_mongo():
     global _client, _db
     logger.info(f"Attempting to connect to MongoDB at {MONGODB_URL}...")
     try:
-        # For Cosmos DB, we need specific settings
+        # For Azure Cosmos DB with MongoDB API
         _client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGODB_URL,
             tls=True,
-            tlsAllowInvalidCertificates=False,
-            retryWrites=False,  # Important for Cosmos DB
-            serverSelectionTimeoutMS=5000,
-            socketTimeoutMS=10000,
-            connectTimeoutMS=10000,
-            appName=PROJECT_NAME,
-            directConnection=True  # Try direct connection to avoid replica set issues
+            retryWrites=False,  # Required for Cosmos DB
+            directConnection=True,  # Try direct connection
+            serverSelectionTimeoutMS=30000,  # Increase timeout
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000,
+            waitQueueTimeoutMS=30000,
+            maxPoolSize=10,
+            minPoolSize=0
         )
         
         # Get the database
         _db = _client[DB_NAME]
         
-        # Simple command that should work with Cosmos DB
-        # Try a different command that's known to work with Cosmos DB
-        db_info = await _client.server_info()
-        logger.info(f"Server info: {db_info}")
+        # A simpler check - just try to list collections
+        collections = await _db.list_collection_names()
+        logger.info(f"Found {len(collections)} collections in database")
         
         logger.info(f"Successfully connected to Cosmos DB database: '{DB_NAME}'")
     except Exception as e:
         logger.error(f"ERROR: Could not connect to MongoDB: {e}")
-        # Log the full exception details for better troubleshooting
         import traceback
         logger.error(traceback.format_exc())
-        _client = None
-        _db = None
-
-async def close_mongo_connection():
-    """Closes the MongoDB connection."""
-    global _client
-    if _client:
-        logger.info("Closing MongoDB connection...")
-        _client.close()
-        logger.info("MongoDB connection closed.")
-
-def get_database():
-    """
-    Returns the database instance. Ensures connection is established.
-    NOTE: Relies on connect_to_mongo() being called at app startup.
-    """
-    if _db is None:
-        logger.warning("Warning: Database instance is not initialized!")
-    return _db
-
-def get_mongo_client() -> motor.motor_asyncio.AsyncIOMotorClient:
-    """
-    Returns the MongoDB client instance. Ensures connection is established.
-    NOTE: Relies on connect_to_mongo() being called at app startup.
-    """
-    if _client is None:
-        logger.warning("Warning: MongoDB client is not initialized!")
-    return _client
+        
+        # Attempt to log some diagnostic information
+        try:
+            # Extract host and credentials from connection string for diagnostics
+            if MONGODB_URL.startswith('mongodb://'):
+                parts = MONGODB_URL.split('@')
+                if len(parts) > 1:
+                    host_part = parts[1].split('/?')[0]
+                    logger.info(f"Attempting to diagnose connection to host: {host_part}")
+                    
+                    # Test if the host is reachable
+                    import socket
+                    hostname, port = host_part.split(':')
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5)
+                    result = sock.connect_ex((hostname, int(port)))
+                    if result == 0:
+                        logger.info(f"Port {port} on {hostname} is open")
+                    else:
+                        logger.error(f"Port {port} on {hostname} is not reachable, error code: {result}
