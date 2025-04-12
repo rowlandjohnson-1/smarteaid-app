@@ -9,7 +9,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(f"{PROJECT_NAME}.db")
 
 # Global variables to hold the client and database instances
-# Note: In more complex scenarios, you might manage this via dependency injection
 _client: motor.motor_asyncio.AsyncIOMotorClient = None
 _db = None
 
@@ -18,20 +17,26 @@ async def connect_to_mongo():
     global _client, _db
     logger.info(f"Attempting to connect to MongoDB at {MONGODB_URL}...")
     try:
-        # Define the Stable API version to use
-        server_api = ServerApi('1')
-        # Create the client, specifying the server_api version
+        # Cosmos DB specific - don't use Server API for Cosmos DB
+        # as it's not fully compatible
         _client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGODB_URL,
             tls=True,
             serverSelectionTimeoutMS=5000,
             appName=PROJECT_NAME,
-            server_api=server_api
+            # No server_api parameter for Cosmos DB
+            # Explicitly set auth source and mechanism for Cosmos DB
+            authSource=DB_NAME,
+            authMechanism='SCRAM-SHA-256'
         )
-        # The ismaster command is cheap and does not require auth.
-        await _client.admin.command('ismaster')  # Ping the server to verify connection
-        _db = _client[DB_NAME]  # Get the specific database instance
-        logger.info(f"Successfully connected to MongoDB database: '{DB_NAME}' using Stable API v1")
+        
+        # Use a simpler command for Cosmos DB instead of ismaster
+        # Just access the database to verify connection
+        _db = _client[DB_NAME]
+        # Simple command that works with Cosmos DB
+        await _db.command("ping")
+        
+        logger.info(f"Successfully connected to MongoDB/Cosmos DB database: '{DB_NAME}'")
     except Exception as e:
         logger.error(f"ERROR: Could not connect to MongoDB: {e}")
         _client = None
@@ -52,8 +57,6 @@ def get_database():
     """
     if _db is None:
         logger.warning("Warning: Database instance is not initialized!")
-        # Depending on design, you might raise an error or attempt connection here.
-        # For now, assuming startup handles connection.
     return _db
 
 def get_mongo_client() -> motor.motor_asyncio.AsyncIOMotorClient:
