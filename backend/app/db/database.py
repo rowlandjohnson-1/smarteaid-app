@@ -1,7 +1,6 @@
 # app/db/database.py
 import motor.motor_asyncio
 import logging
-from pymongo.server_api import ServerApi
 from app.core.config import MONGODB_URL, DB_NAME, PROJECT_NAME
 
 # Setup basic logging
@@ -17,28 +16,33 @@ async def connect_to_mongo():
     global _client, _db
     logger.info(f"Attempting to connect to MongoDB at {MONGODB_URL}...")
     try:
-        # Cosmos DB specific - don't use Server API for Cosmos DB
-        # as it's not fully compatible
+        # For Cosmos DB, we need specific settings
         _client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGODB_URL,
             tls=True,
+            tlsAllowInvalidCertificates=False,
+            retryWrites=False,  # Important for Cosmos DB
             serverSelectionTimeoutMS=5000,
+            socketTimeoutMS=10000,
+            connectTimeoutMS=10000,
             appName=PROJECT_NAME,
-            # No server_api parameter for Cosmos DB
-            # Explicitly set auth source and mechanism for Cosmos DB
-            authSource=DB_NAME,
-            authMechanism='SCRAM-SHA-256'
+            directConnection=True  # Try direct connection to avoid replica set issues
         )
         
-        # Use a simpler command for Cosmos DB instead of ismaster
-        # Just access the database to verify connection
+        # Get the database
         _db = _client[DB_NAME]
-        # Simple command that works with Cosmos DB
-        await _db.command("ping")
         
-        logger.info(f"Successfully connected to MongoDB/Cosmos DB database: '{DB_NAME}'")
+        # Simple command that should work with Cosmos DB
+        # Try a different command that's known to work with Cosmos DB
+        db_info = await _client.server_info()
+        logger.info(f"Server info: {db_info}")
+        
+        logger.info(f"Successfully connected to Cosmos DB database: '{DB_NAME}'")
     except Exception as e:
         logger.error(f"ERROR: Could not connect to MongoDB: {e}")
+        # Log the full exception details for better troubleshooting
+        import traceback
+        logger.error(traceback.format_exc())
         _client = None
         _db = None
 
