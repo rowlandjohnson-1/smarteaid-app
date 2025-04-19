@@ -5,3 +5,7 @@ uvicorn[standard]>=0.29.0
 pydantic>=2.0.0,<3.0.0
 motor>=3.4.0
 python-dotenv>=1.0.0
+psutil>=5.9.0)
+azure-storage-blob>=12.19.0
+
+http://localhost:5173/?code=BHEFSLO9AlbRy5scOQtNasrf-MkzM9uTjS6SWKsIeXU.tYDsbvCaWZsA8h36dNSlU9oqNj_gvq5GFj4YYzYEXoQ&scope=email%20profile%20openid%20offline&state=eyJraW5kZSI6eyJldmVudCI6ImxvZ2luIn19
