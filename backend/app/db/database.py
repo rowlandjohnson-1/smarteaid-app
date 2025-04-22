@@ -11,9 +11,10 @@ from app.core.config import MONGODB_URL, DB_NAME, PROJECT_NAME
 # Setup logging using your project name
 # Ensure logging is configured elsewhere (e.g., main.py)
 # logging.basicConfig(level=logging.INFO) # Avoid configuring here if done elsewhere
-logger = logging.getLogger(f"{PROJECT_NAME}.db")
+logger = logging.getLogger(f"{PROJECT_NAME}.db") # Using f-string for logger name
 
 # Global variables to hold the client and database instances with type hints
+# Using underscore prefix convention for module-level globals
 _client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
 _db: Optional[motor.motor_asyncio.AsyncIOMotorDatabase] = None
 
@@ -39,10 +40,11 @@ async def connect_to_mongo() -> bool:
     try:
         _client = motor.motor_asyncio.AsyncIOMotorClient(
             MONGODB_URL,
-            tls=True,             # Often required for Cosmos DB
+            tls=True,           # Often required for Cosmos DB
             retryWrites=False,    # Required for Cosmos DB
             serverSelectionTimeoutMS=10000,
             maxPoolSize=10,
+            uuidRepresentation='standard' # <-- ADDED THIS LINE
             # appname=PROJECT_NAME # Optional: helps identify app in logs/metrics
         )
         # Ping the server to verify connection before proceeding
@@ -96,16 +98,22 @@ async def check_database_health() -> Dict[str, Any]:
     Returns:
         Dict containing status, connection details, collection info, errors, timestamp.
     """
-    # Define expected collections based on crud.py constants
-    EXPECTED_COLLECTIONS = [
-        "schools",
-        "teachers",
-        "classgroups",
-        "students",
-        "assignments", # Added
-        "documents",   # Added
-        "results"      # Added
-    ]
+    # Define expected collections based on crud.py constants (assuming crud.py is accessible or names are hardcoded/configured)
+    # If importing crud causes circular dependencies, list names directly
+    try:
+        from ..db import crud # Try importing crud to get constants
+        EXPECTED_COLLECTIONS = [
+            crud.SCHOOL_COLLECTION, crud.TEACHER_COLLECTION, crud.CLASSGROUP_COLLECTION,
+            crud.STUDENT_COLLECTION, crud.ASSIGNMENT_COLLECTION, crud.DOCUMENT_COLLECTION,
+            crud.RESULT_COLLECTION
+        ]
+    except ImportError:
+         # Fallback if crud cannot be imported here
+         EXPECTED_COLLECTIONS = [
+            "schools", "teachers", "classgroups", "students",
+            "assignments", "documents", "results"
+         ]
+
 
     health_info = {
         "status": "OK",
@@ -118,20 +126,25 @@ async def check_database_health() -> Dict[str, Any]:
     }
 
     try:
-        db = get_database()
-        if not db:
+        db_instance = get_database() # Renamed variable to avoid conflict
+        # Use 'is None' check
+        if db_instance is None:
             health_info.update({
                 "status": "ERROR",
                 "error": "Database instance not initialized (connection likely failed on startup)"
             })
             return health_info
 
-        # Verify connection with ping
-        await db.client.admin.command('ping')
-        health_info["connected"] = True
+        # Verify connection with ping using the client from the db instance
+        if db_instance.client:
+             await db_instance.client.admin.command('ping')
+             health_info["connected"] = True
+        else:
+             raise RuntimeError("Database client not available for ping")
+
 
         # List actual collections
-        collections = await db.list_collection_names()
+        collections = await db_instance.list_collection_names()
         health_info["collections"] = collections
 
         # Check for missing expected collections
@@ -140,15 +153,6 @@ async def check_database_health() -> Dict[str, Any]:
             health_info["missing_collections"] = missing
             health_info["status"] = "WARNING" # Downgrade status if collections missing
             logger.warning(f"Database health check WARNING: Missing expected collections: {missing}")
-
-        # Optional: Verify access to a specific collection (e.g., schools)
-        # try:
-        #     await db[SCHOOL_COLLECTION].find_one({}, {"_id": 1}) # Try a simple read
-        # except Exception as e:
-        #      logger.error(f"Error performing test read on collection '{SCHOOL_COLLECTION}': {e}")
-        #      health_info["status"] = "ERROR"
-        #      health_info["error"] = f"Error accessing collection '{SCHOOL_COLLECTION}': {str(e)}"
-        #      return health_info
 
         return health_info
 
@@ -163,3 +167,4 @@ async def check_database_health() -> Dict[str, Any]:
 
 # Helper function (kept for reference, but crud.py has its own _get_collection)
 # def _get_collection(collection_name: str) -> Optional[AsyncIOMotorCollection]: ...
+

@@ -35,18 +35,17 @@ class FileType(str, Enum):
 
 class DocumentStatus(str, Enum):
     """Enumeration for the processing status of a document."""
-    UPLOADED = "uploaded"   # File received and stored
-    QUEUED = "queued"       # Queued for AI analysis
-    PROCESSING = "processing" # Actively being analyzed by ML model
-    COMPLETED = "completed"   # Analysis finished, result available
-    ERROR = "error"         # An error occurred during processing
+    UPLOADED = "UPLOADED"     # File received and stored (Changed to uppercase)
+    QUEUED = "QUEUED"         # Queued for AI analysis (Changed to uppercase)
+    PROCESSING = "PROCESSING" # Actively being analyzed by ML model (Changed to uppercase)
+    COMPLETED = "COMPLETED"   # Analysis finished, result available (Changed to uppercase)
+    ERROR = "ERROR"           # An error occurred during processing (Changed to uppercase)
 
 # --- Result Related Enums ---
 
 class ResultStatus(str, Enum):
     """Enumeration for the status of an AI detection result."""
-    PENDING = "pending"     # Analysis requested but not yet started/completed
-    ASSESSING = "assessing"   # Analysis in progress
-    COMPLETED = "completed"   # Analysis complete, score available
-    ERROR = "error"         # Error during analysis, score may be unavailable
-
+    PENDING = "PENDING"       # Analysis requested but not yet started/completed (Changed to uppercase)
+    ASSESSING = "ASSESSING"   # Analysis in progress (Changed to uppercase)
+    COMPLETED = "COMPLETED"   # Analysis complete, score available (Changed to uppercase)
+    ERROR = "ERROR"           # Error during analysis, score may be unavailable (Changed to uppercase)
