@@ -18,13 +18,17 @@ from .database import get_database
 
 # --- Pydantic Models ---
 from ..models.school import SchoolCreate, SchoolUpdate, School
+# --- Use the updated Teacher models ---
 from ..models.teacher import Teacher, TeacherCreate, TeacherUpdate
+# ------------------------------------
 from ..models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
 from ..models.student import Student, StudentCreate, StudentUpdate
 from ..models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
 from ..models.document import Document, DocumentCreate, DocumentUpdate
 from ..models.result import Result, ResultCreate, ResultUpdate
-from ..models.enums import DocumentStatus, ResultStatus, FileType
+# --- Import Enums used in Teacher model ---
+from ..models.enums import DocumentStatus, ResultStatus, FileType, TeacherRole, MarketingSource
+# ----------------------------------------
 
 # --- Logging Setup ---
 logger = logging.getLogger(__name__)
@@ -38,14 +42,12 @@ ASSIGNMENT_COLLECTION = "assignments"
 DOCUMENT_COLLECTION = "documents"
 RESULT_COLLECTION = "results"
 
-
-# --- Transaction and Soft Delete Support ---
+# --- Transaction and Helper Functions (Assume these exist as before) ---
 @asynccontextmanager
 async def transaction():
     db = get_database()
     if db is None: raise RuntimeError("Database connection not available for transaction (db is None)")
     if not db.client: raise RuntimeError("Database client not available for session")
-    # Check if the client supports sessions before starting one
     if hasattr(db.client, 'start_session'):
         async with await db.client.start_session() as session:
             async with session.start_transaction():
@@ -59,40 +61,36 @@ async def transaction():
                     logger.debug("MongoDB transaction explicitly aborted.")
                     raise
     else:
-        # If sessions are not supported (e.g., older MongoDB versions or specific setups)
         logger.warning("Database client does not support sessions/transactions. Proceeding without transaction.")
-        yield None # Yield None if no session is used
+        yield None
 
 def with_transaction(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         session = kwargs.get('session')
         if session is not None:
-            # Already in a transaction, just call the function
             return await func(*args, **kwargs)
         else:
-            # Start a new transaction if supported
             try:
                 async with transaction() as new_session:
-                    kwargs['session'] = new_session # Pass session even if it's None
+                    kwargs['session'] = new_session
                     return await func(*args, **kwargs)
             except Exception as e:
                 logger.error(f"Transaction failed or not supported for function {func.__name__}: {e}")
-                return None # Return None on transaction failure or if not supported
+                return None
     return wrapper
 
 def soft_delete_filter(include_deleted: bool = False) -> Dict[str, Any]:
     if include_deleted: return {}
     return {"deleted_at": None}
 
-# --- Helper Functions ---
 def _get_collection(collection_name: str) -> Optional[AsyncIOMotorCollection]:
     db = get_database()
     if db is not None: return db[collection_name]
     logger.error("Database connection is not available (db object is None). Cannot get collection.")
     return None
 
-# --- School CRUD Functions ---
+# --- School CRUD Functions (Assume these exist as before) ---
 @with_transaction
 async def create_school(school_in: SchoolCreate, session=None) -> Optional[School]:
     collection = _get_collection(SCHOOL_COLLECTION); now = datetime.now(timezone.utc)
@@ -167,31 +165,64 @@ async def delete_school(school_id: uuid.UUID, hard_delete: bool = False, session
 
 # --- Teacher CRUD Functions ---
 @with_transaction
-async def create_teacher(teacher_in: TeacherCreate, session=None) -> Optional[Teacher]:
+async def create_teacher(teacher_in: TeacherCreate, kinde_id: str, session=None) -> Optional[Teacher]:
+    """Creates a teacher record, linking it to a Kinde ID."""
     collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
-    new_user_id = uuid.uuid4()
-    # Ensure user_id is set in the doc for DB, aligning with Pydantic model if it uses user_id
-    teacher_doc = teacher_in.model_dump(); teacher_doc["_id"] = new_user_id; teacher_doc["user_id"] = new_user_id
+
+    # Assuming the primary key (_id) for Teacher should be the Kinde user ID ('sub')
+    try:
+        user_id = uuid.UUID(kinde_id) # Use Kinde ID as the primary UUID key
+    except (ValueError, TypeError):
+        logger.error(f"Invalid Kinde ID format '{kinde_id}' provided for new teacher.")
+        return None # Or raise a specific error
+
+    teacher_doc = teacher_in.model_dump();
+    teacher_doc["_id"] = user_id # Use Kinde UUID as the primary key _id
+    teacher_doc["user_id"] = user_id # Also store it in user_id field if model expects it
+    teacher_doc["kinde_id"] = kinde_id # Store the original string Kinde ID if needed
+
     teacher_doc["created_at"] = now; teacher_doc["updated_at"] = now; teacher_doc["deleted_at"] = None
-    logger.info(f"Inserting teacher: {teacher_doc['_id']}")
-    try: inserted_result = await collection.insert_one(teacher_doc, session=session)
-    except Exception as e: logger.error(f"Error inserting teacher: {e}", exc_info=True); return None
-    if inserted_result.acknowledged: created_doc = await collection.find_one({"_id": new_user_id}, session=session)
-    else: logger.error(f"Insert teacher not acknowledged: {new_user_id}"); return None
-    if created_doc: return Teacher(**created_doc) # Assumes schema handles alias
-    else: logger.error(f"Failed retrieve teacher post-insert: {new_user_id}"); return None
+    logger.info(f"Inserting teacher with ID (from Kinde sub): {teacher_doc['_id']}")
+    try:
+        inserted_result = await collection.insert_one(teacher_doc, session=session)
+    except DuplicateKeyError:
+        logger.warning(f"Teacher record with ID {user_id} already exists.")
+        # Optionally fetch and return existing record or handle as error
+        return await get_teacher_by_id(user_id=user_id, session=session)
+    except Exception as e:
+        logger.error(f"Error inserting teacher: {e}", exc_info=True); return None
+
+    if inserted_result.acknowledged:
+        created_doc = await collection.find_one({"_id": user_id}, session=session)
+        if created_doc:
+            # Map _id back to user_id for Pydantic model
+            mapped_data = {**created_doc}
+            if "_id" in mapped_data: mapped_data["user_id"] = mapped_data.pop("_id")
+            return Teacher(**mapped_data)
+        else:
+            logger.error(f"Failed retrieve teacher post-insert: {user_id}"); return None
+    else:
+        logger.error(f"Insert teacher not acknowledged: {user_id}"); return None
+
 
 async def get_teacher_by_id(user_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Teacher]:
     collection = _get_collection(TEACHER_COLLECTION);
     if collection is None: return None
     # Use _id for query as that's the DB primary key
-    logger.info(f"Getting teacher: {user_id}")
+    logger.info(f"Getting teacher by user_id: {user_id}")
     query = {"_id": user_id}; query.update(soft_delete_filter(include_deleted))
-    try: teacher_doc = await collection.find_one(query, session=session)
-    except Exception as e: logger.error(f"Error getting teacher: {e}", exc_info=True); return None
-    if teacher_doc: return Teacher(**teacher_doc) # Assumes schema handles alias
-    else: logger.warning(f"Teacher {user_id} not found."); return None
+    try:
+        teacher_doc = await collection.find_one(query, session=session)
+        if teacher_doc:
+             # Map _id back to user_id for Pydantic model
+            mapped_data = {**teacher_doc}
+            if "_id" in mapped_data: mapped_data["user_id"] = mapped_data.pop("_id")
+            return Teacher(**mapped_data) # Assumes schema handles alias correctly now
+        else:
+            logger.warning(f"Teacher {user_id} not found."); return None
+    except Exception as e:
+        logger.error(f"Error getting teacher: {e}", exc_info=True); return None
 
 async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Teacher]:
     collection = _get_collection(TEACHER_COLLECTION); teachers_list: List[Teacher] = []
@@ -203,30 +234,80 @@ async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: boo
         async for doc in cursor:
              try:
                  mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 else: logger.warning(f"Teacher doc missing '_id': {doc}"); continue
-                 # Assuming Teacher schema also uses 'id' as the primary key field name
+                 # --- Ensure _id is mapped to user_id for the Teacher model ---
+                 if "_id" in mapped_data:
+                     mapped_data["user_id"] = mapped_data.pop("_id") # Map _id to user_id
+                 else:
+                     logger.warning(f"Teacher doc missing '_id': {doc}"); continue
+                 # -------------------------------------------------------------
                  teachers_list.append(Teacher(**mapped_data))
-             except Exception as validation_err: logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
-    except Exception as e: logger.error(f"Error getting all teachers: {e}", exc_info=True)
+             except Exception as validation_err:
+                 logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
+    except Exception as e:
+        logger.error(f"Error getting all teachers: {e}", exc_info=True)
     return teachers_list
 
+# --- UPDATED update_teacher Function ---
 @with_transaction
 async def update_teacher(user_id: uuid.UUID, teacher_in: TeacherUpdate, session=None) -> Optional[Teacher]:
     collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
+
+    # Get update data, excluding fields not set in the input model
+    # Use model_dump for Pydantic V2
     update_data = teacher_in.model_dump(exclude_unset=True)
-    # Don't pop user_id if it's part of TeacherUpdate and allowed to be changed
-    update_data.pop("_id", None); update_data.pop("id", None); # Pop internal 'id' if accidentally present
-    update_data.pop("created_at", None); update_data.pop("deleted_at", None)
-    if not update_data: logger.warning(f"No update data for teacher {user_id}"); return await get_teacher_by_id(user_id, include_deleted=False, session=session)
-    update_data["updated_at"] = now; logger.info(f"Updating teacher {user_id}")
-    query_filter = {"_id": user_id, "deleted_at": None} # Query by _id
+
+    # Convert enums to their values if necessary for DB storage
+    # (Depends on if your DB driver handles enums directly or needs values)
+    if 'role' in update_data and isinstance(update_data['role'], TeacherRole):
+        update_data['role'] = update_data['role'].value
+
+    # Remove fields that should not be updated directly or are handled by DB/logic
+    update_data.pop("_id", None) # Cannot update primary key
+    update_data.pop("id", None) # Cannot update alias if present
+    update_data.pop("user_id", None) # Should not update user_id link
+    update_data.pop("kinde_id", None) # Should not update kinde_id link
+    update_data.pop("created_at", None) # Should not update creation time
+    update_data.pop("deleted_at", None) # Soft delete handled separately
+    # Remove how_did_you_hear if it's not in TeacherUpdate
+    update_data.pop("how_did_you_hear", None)
+
+
+    # Check if there's anything left to update
+    if not update_data:
+        logger.warning(f"No update data provided for teacher {user_id}")
+        # Return the current teacher data if no changes were requested
+        return await get_teacher_by_id(user_id, include_deleted=False, session=session)
+
+    # Add the update timestamp
+    update_data["updated_at"] = now
+    logger.info(f"Updating teacher {user_id} with data: {update_data}")
+
+    # Define the filter to find the correct teacher document (_id is the primary key)
+    query_filter = {"_id": user_id, "deleted_at": None} # Ensure we don't update soft-deleted records
+
     try:
-        updated_doc = await collection.find_one_and_update( query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
-        if updated_doc: return Teacher(**updated_doc) # Assumes schema handles alias
-        else: logger.warning(f"Teacher {user_id} not found or already deleted for update."); return None
-    except Exception as e: logger.error(f"Error during teacher update operation: {e}", exc_info=True); return None
+        # Perform the update and return the updated document
+        updated_doc = await collection.find_one_and_update(
+            query_filter,
+            {"$set": update_data},
+            return_document=ReturnDocument.AFTER, # Return the document *after* the update
+            session=session
+        )
+
+        if updated_doc:
+            # Map _id back to user_id before returning Pydantic model
+            mapped_data = {**updated_doc}
+            if "_id" in mapped_data:
+                mapped_data["user_id"] = mapped_data.pop("_id")
+            return Teacher(**mapped_data) # Validate and return
+        else:
+            logger.warning(f"Teacher {user_id} not found or already deleted during update attempt.")
+            return None
+    except Exception as e:
+        logger.error(f"Error during teacher update operation for {user_id}: {e}", exc_info=True)
+        return None
+# --- END UPDATED update_teacher Function ---
 
 @with_transaction
 async def delete_teacher(user_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
@@ -244,7 +325,7 @@ async def delete_teacher(user_id: uuid.UUID, hard_delete: bool = False, session=
     else: logger.warning(f"Teacher {user_id} not found or already deleted."); return False
 
 
-# --- ClassGroup CRUD Functions ---
+# --- ClassGroup CRUD Functions (Assume these exist as before) ---
 @with_transaction
 async def create_class_group(class_group_in: ClassGroupCreate, session=None) -> Optional[ClassGroup]:
     collection = _get_collection(CLASSGROUP_COLLECTION); now = datetime.now(timezone.utc)
@@ -284,7 +365,6 @@ async def get_all_class_groups( teacher_id: Optional[uuid.UUID] = None, school_i
                  mapped_data = {**doc}
                  if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
                  else: logger.warning(f"ClassGroup doc missing '_id': {doc}"); continue
-                 # Assuming ClassGroup schema also uses 'id' as the primary key field name
                  items_list.append(ClassGroup(**mapped_data))
              except Exception as validation_err: logger.error(f"Pydantic validation failed for class group doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e: logger.error(f"Error getting all class groups: {e}", exc_info=True)
@@ -322,29 +402,24 @@ async def delete_class_group(class_group_id: uuid.UUID, hard_delete: bool = Fals
     else: logger.warning(f"Class group {class_group_id} not found or already deleted."); return False
 
 
-# --- Student CRUD Functions ---
+# --- Student CRUD Functions (Assume these exist as before) ---
 @with_transaction
 async def create_student(student_in: StudentCreate, session=None) -> Optional[Student]:
     collection = _get_collection(STUDENT_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
     internal_id = uuid.uuid4()
-    # Prepare document for insertion, ensuring _id and timestamps are set
     student_doc = student_in.model_dump()
     student_doc["_id"] = internal_id # Use _id for DB
     student_doc["created_at"] = now
     student_doc["updated_at"] = now
     student_doc["deleted_at"] = None
-    # Handle empty string for optional external ID if needed by unique index logic
     if student_doc.get("external_student_id") == "": student_doc["external_student_id"] = None
     logger.info(f"Inserting student: {student_doc['_id']}")
     try:
         inserted_result = await collection.insert_one(student_doc, session=session)
         if inserted_result.acknowledged:
-            # Fetch the inserted doc to return the full object including potentially DB defaults
             created_doc = await collection.find_one({"_id": internal_id}, session=session)
             if created_doc:
-                # Validate fetched doc with the Response model (Student) before returning
-                # Explicitly map _id to id here before validation
                 mapped_data = {**created_doc}
                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
                 return Student(**mapped_data)
@@ -367,7 +442,6 @@ async def get_student_by_id(student_internal_id: uuid.UUID, include_deleted: boo
     try:
         student_doc = await collection.find_one(query, session=session)
         if student_doc:
-            # Validate with Response model, ensuring _id -> id mapping
             mapped_data = {**student_doc}
             if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
             return Student(**mapped_data)
@@ -376,7 +450,6 @@ async def get_student_by_id(student_internal_id: uuid.UUID, include_deleted: boo
     except Exception as e:
         logger.error(f"Error getting student: {e}", exc_info=True); return None
 
-# --- MODIFIED get_all_students Function ---
 async def get_all_students( external_student_id: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, year_group: Optional[str] = None, skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Student]:
     collection = _get_collection(STUDENT_COLLECTION); students_list: List[Student] = []
     if collection is None: return students_list
@@ -390,37 +463,27 @@ async def get_all_students( external_student_id: Optional[str] = None, first_nam
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
             try:
-                # --- Explicitly map _id to id before Pydantic validation ---
                 mapped_data = {**doc} # Create a mutable copy
                 if "_id" in mapped_data:
                     mapped_data["id"] = mapped_data.pop("_id") # Rename key
                 else:
                     logger.warning(f"Student document missing '_id': {doc}")
                     continue # Skip this document if it has no _id
-
-                # Validate using the response model (Student) which expects 'id'
                 student_instance = Student(**mapped_data)
                 students_list.append(student_instance)
-                # --------------------------------------------------------------
             except Exception as validation_err:
-                # Log validation error for specific document but continue with others
                 doc_id_for_log = doc.get('_id', 'UNKNOWN_ID') # Use original doc for logging ID
                 logger.error(f"Pydantic validation failed for student doc {doc_id_for_log}: {validation_err}", exc_info=True) # Add traceback for validation errors
-
     except Exception as e:
         logger.error(f"Error getting all students during DB query: {e}", exc_info=True)
     return students_list
-# --- END MODIFIED get_all_students Function ---
 
 @with_transaction
 async def update_student(student_internal_id: uuid.UUID, student_in: StudentUpdate, session=None) -> Optional[Student]:
     collection = _get_collection(STUDENT_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
-    # Convert Pydantic model to dict, exclude unset fields
     update_data = student_in.model_dump(exclude_unset=True)
-    # Remove fields that should not be updated directly or handled differently
     update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("deleted_at", None)
-    # Handle potential empty string for external ID if it needs to be unset
     if "external_student_id" in update_data and update_data["external_student_id"] == "": update_data["external_student_id"] = None
     if not update_data: logger.warning(f"No update data provided for student {student_internal_id}"); return await get_student_by_id(student_internal_id, include_deleted=False, session=session)
     update_data["updated_at"] = now; logger.info(f"Updating student {student_internal_id}")
@@ -428,7 +491,6 @@ async def update_student(student_internal_id: uuid.UUID, student_in: StudentUpda
     try:
         updated_doc = await collection.find_one_and_update( query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
         if updated_doc:
-            # Validate with Response model, ensuring _id -> id mapping
             mapped_data = {**updated_doc}
             if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
             return Student(**mapped_data)
@@ -457,8 +519,7 @@ async def delete_student(student_internal_id: uuid.UUID, hard_delete: bool = Fal
     else: logger.warning(f"Student {student_internal_id} not found or already deleted."); return False
 
 
-# --- Assignment CRUD Functions ---
-# ... (Keep existing Assignment CRUD functions, maybe apply same mapping logic if needed) ...
+# --- Assignment CRUD Functions (Assume these exist as before) ---
 @with_transaction
 async def create_assignment(assignment_in: AssignmentCreate, session=None) -> Optional[Assignment]:
     collection = _get_collection(ASSIGNMENT_COLLECTION); now = datetime.now(timezone.utc)
@@ -533,14 +594,13 @@ async def delete_assignment(assignment_id: uuid.UUID, hard_delete: bool = False,
     else: logger.warning(f"Assignment {assignment_id} not found or already deleted."); return False
 
 
-# --- Document CRUD Functions ---
+# --- Document CRUD Functions (Assume these exist as before) ---
 # @with_transaction # Keep transaction commented out if needed for collection creation
 async def create_document(document_in: DocumentCreate, session=None) -> Optional[Document]:
     collection = _get_collection(DOCUMENT_COLLECTION)
     if collection is None: return None
     document_id = uuid.uuid4()
     now = datetime.now(timezone.utc); doc_dict = document_in.model_dump()
-    # Convert enums to values before insertion if necessary
     if isinstance(doc_dict.get("status"), DocumentStatus): doc_dict["status"] = doc_dict["status"].value
     if isinstance(doc_dict.get("file_type"), FileType): doc_dict["file_type"] = doc_dict["file_type"].value
     doc = doc_dict; doc["_id"] = document_id; doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
@@ -612,14 +672,13 @@ async def delete_document(document_id: uuid.UUID, hard_delete: bool = False, ses
     if count == 1: return True
     else: logger.warning(f"Document metadata {document_id} not found or already deleted."); return False
 
-# --- Result CRUD Functions ---
+# --- Result CRUD Functions (Assume these exist as before) ---
 # @with_transaction # Keep transaction commented out if needed
 async def create_result(result_in: ResultCreate, session=None) -> Optional[Result]:
     collection = _get_collection(RESULT_COLLECTION)
     if collection is None: return None
     result_id = uuid.uuid4()
     now = datetime.now(timezone.utc); result_dict = result_in.model_dump()
-    # Convert enum to value if needed before insert
     if isinstance(result_dict.get("status"), ResultStatus): result_dict["status"] = result_dict["status"].value
     result_doc = result_dict; result_doc["_id"] = result_id; result_doc["created_at"] = now; result_doc["updated_at"] = now; result_doc["deleted_at"] = None
     logger.info(f"Inserting result for document: {result_doc['document_id']}")
@@ -657,7 +716,6 @@ async def update_result(result_id: uuid.UUID, result_in: ResultUpdate, session=N
     if collection is None: return None
     now = datetime.now(timezone.utc)
     update_data = result_in.model_dump(exclude_unset=True)
-    # Convert enum to value if needed before update
     if "status" in update_data and isinstance(update_data["status"], ResultStatus): update_data["status"] = update_data["status"].value
     update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("document_id", None); update_data.pop("deleted_at", None)
     if not update_data: logger.warning(f"No update data for result {result_id}"); return await get_result_by_id(result_id, include_deleted=False, session=session)
@@ -684,7 +742,7 @@ async def delete_result(result_id: uuid.UUID, hard_delete: bool = False, session
     if count == 1: return True
     else: logger.warning(f"Result {result_id} not found or already deleted."); return False
 
-# --- Bulk Operations ---
+# --- Bulk Operations (Assume these exist as before) ---
 @with_transaction
 async def bulk_create_schools(schools_in: List[SchoolCreate], session=None) -> List[School]:
     collection = _get_collection(SCHOOL_COLLECTION)
@@ -742,7 +800,7 @@ async def bulk_delete_schools(school_ids: List[uuid.UUID], hard_delete: bool = F
         logger.info(f"Successfully {'hard' if hard_delete else 'soft'} deleted {deleted_count} schools"); return deleted_count
     except Exception as e: logger.error(f"Error during bulk school deletion: {e}", exc_info=True); return 0
 
-# --- Advanced Filtering Support ---
+# --- Advanced Filtering Support (Assume these exist as before) ---
 class FilterOperator:
     EQUALS = "$eq"; NOT_EQUALS = "$ne"; GREATER_THAN = "$gt"; LESS_THAN = "$lt"
     GREATER_THAN_EQUALS = "$gte"; LESS_THAN_EQUALS = "$lte"; IN = "$in"; NOT_IN = "$nin"
@@ -761,7 +819,7 @@ def build_filter_query(filters: Dict[str, Any], include_deleted: bool = False) -
     query.update(soft_delete_filter(include_deleted))
     return query
 
-# --- Relationship Validation ---
+# --- Relationship Validation (Assume these exist as before) ---
 async def validate_school_teacher_relationship( school_id: uuid.UUID, teacher_id: uuid.UUID, session=None) -> bool:
     teacher = await get_teacher_by_id(teacher_id, include_deleted=False, session=session)
     return teacher is not None and teacher.school_id == school_id # Ensure teacher is not None
@@ -777,7 +835,7 @@ async def validate_student_class_group_relationship( student_id: uuid.UUID, clas
     # Ensure class_group.student_ids exists and is a list before checking 'in'
     return class_group is not None and isinstance(class_group.student_ids, list) and student_id in class_group.student_ids
 
-# --- Enhanced Query Functions ---
+# --- Enhanced Query Functions (Assume these exist as before) ---
 async def get_schools_with_filters(
     filters: Dict[str, Any], include_deleted: bool = False, skip: int = 0,
     limit: int = 100, sort_by: Optional[str] = None, sort_order: int = 1, session=None
