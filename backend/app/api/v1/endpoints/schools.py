@@ -6,12 +6,11 @@ from typing import List, Dict, Any # Add Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query, Depends # Add Depends
 
 # Import Pydantic models for request/response validation
-# Adjust path based on your structure (assuming endpoints is 3 levels down from app)
-from ....models.school import School, SchoolCreate, SchoolUpdate
+from app.models.school import School, SchoolCreate, SchoolUpdate
 # Import CRUD functions for database interaction
-from ....db import crud # Assuming crud functions are in app/db/crud.py
+from app.db import crud # Assuming crud functions are in app/db/crud.py
 # Import the authentication dependency
-from ....core.security import get_current_user_payload # Adjust path
+from app.core.security import get_current_user_payload # Adjust path
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)

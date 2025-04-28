@@ -48,9 +48,9 @@ async def transaction():
     db = get_database()
     if db is None: raise RuntimeError("Database connection not available for transaction (db is None)")
     if not hasattr(db, 'client') or db.client is None:
-         logger.warning("Database client not available or does not support sessions. Proceeding without transaction.")
-         yield None
-         return # Exit context manager
+        logger.warning("Database client not available or does not support sessions. Proceeding without transaction.")
+        yield None
+        return # Exit context manager
     if hasattr(db.client, 'start_session'):
         session = None # Initialize session to None
         try:
@@ -60,11 +60,11 @@ async def transaction():
                     try:
                         yield session
                         if session.in_transaction:
-                             logger.debug("MongoDB transaction committing.")
-                             await session.commit_transaction()
-                             logger.debug("MongoDB transaction committed.")
+                            logger.debug("MongoDB transaction committing.")
+                            await session.commit_transaction()
+                            logger.debug("MongoDB transaction committed.")
                         else:
-                             logger.warning("Session not in transaction at commit point.")
+                            logger.warning("Session not in transaction at commit point.")
                     except Exception as e:
                         logger.error(f"MongoDB transaction aborted due to error: {e}", exc_info=True)
                         if session and session.in_transaction:
@@ -72,9 +72,9 @@ async def transaction():
                             logger.debug("MongoDB transaction explicitly aborted.")
                         raise
         except Exception as outer_e:
-             # Catch potential errors starting the session itself
-             logger.error(f"Failed to start MongoDB session or transaction: {outer_e}", exc_info=True)
-             raise # Re-raise the exception that occurred during session/transaction start
+            # Catch potential errors starting the session itself
+            logger.error(f"Failed to start MongoDB session or transaction: {outer_e}", exc_info=True)
+            raise # Re-raise the exception that occurred during session/transaction start
 
     else:
         logger.warning("Database client does not support sessions/transactions. Proceeding without transaction.")
@@ -152,12 +152,12 @@ async def get_all_schools(skip: int = 0, limit: int = 100, include_deleted: bool
     try:
         cursor = collection.find(query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
-             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 else: logger.warning(f"School doc missing '_id': {doc}"); continue
-                 schools_list.append(School(**mapped_data))
-             except Exception as validation_err: logger.error(f"Pydantic validation failed for school doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
+            try:
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                else: logger.warning(f"School doc missing '_id': {doc}"); continue
+                schools_list.append(School(**mapped_data))
+            except Exception as validation_err: logger.error(f"Pydantic validation failed for school doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e: logger.error(f"Error getting all schools: {e}", exc_info=True)
     return schools_list
 
@@ -191,7 +191,6 @@ async def delete_school(school_id: uuid.UUID, hard_delete: bool = False, session
 
 
 # --- Teacher CRUD Functions ---
-# --- UPDATED create_teacher function signature ---
 # @with_transaction # Keep commented out if transactions cause issues
 async def create_teacher(
     teacher_in: TeacherCreate, # Use TeacherCreate as defined in teacher.py
@@ -204,9 +203,9 @@ async def create_teacher(
     """
     # If not using transaction, session will be None here
     if session:
-         logger.debug("create_teacher called within an existing session.")
+        logger.debug("create_teacher called within an existing session.")
     else:
-         logger.warning("create_teacher called WITHOUT an active session (transaction decorator removed/disabled).")
+        logger.warning("create_teacher called WITHOUT an active session (transaction decorator removed/disabled).")
 
     collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
@@ -227,6 +226,8 @@ async def create_teacher(
     # We might need explicit conversion for enums if use_enum_values=False in model
     if isinstance(teacher_doc.get("role"), TeacherRole):
         teacher_doc["role"] = teacher_doc["role"].value # Store the string value
+    if isinstance(teacher_doc.get("how_did_you_hear"), MarketingSource):
+        teacher_doc["how_did_you_hear"] = teacher_doc["how_did_you_hear"].value # Store the string value
     if "is_active" not in teacher_doc: # Ensure default is set if not present
         teacher_doc["is_active"] = True
 
@@ -253,7 +254,6 @@ async def create_teacher(
             logger.error(f"Failed retrieve teacher post-insert: internal ID {internal_id}"); return None
     else:
         logger.error(f"Insert teacher not acknowledged: internal ID {internal_id}"); return None
-# --- END UPDATED create_teacher ---
 
 async def get_teacher_by_kinde_id(kinde_id: str, include_deleted: bool = False, session=None) -> Optional[Teacher]:
     """Retrieves a teacher profile using their Kinde ID."""
@@ -279,15 +279,14 @@ async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: boo
         # Fetch without session
         cursor = collection.find(query).skip(skip).limit(limit)
         async for doc in cursor:
-             try:
+            try:
                  teachers_list.append(Teacher(**doc))
-             except Exception as validation_err:
-                 logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
+            except Exception as validation_err:
+                logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e:
         logger.error(f"Error getting all teachers: {e}", exc_info=True)
     return teachers_list
 
-# Update function remains largely the same, uses TeacherUpdate model
 @with_transaction # Keep transaction for update as it modifies existing data
 async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None) -> Optional[Teacher]:
     """Updates a teacher's profile information identified by their Kinde ID."""
@@ -364,16 +363,24 @@ async def delete_teacher(kinde_id: str, hard_delete: bool = False, session=None)
         logger.warning(f"Teacher with Kinde ID {kinde_id} not found or already deleted."); return False
 
 
-# --- ClassGroup CRUD Functions (Assume these exist as before) ---
-@with_transaction
-async def create_class_group(class_group_in: ClassGroupCreate, session=None) -> Optional[ClassGroup]:
+# --- ClassGroup CRUD Functions ---
+# --- REMOVED @with_transaction from create_class_group ---
+async def create_class_group(
+    class_group_in: ClassGroupCreate,
+    teacher_id: uuid.UUID, # ADD teacher_id as an argument
+    session=None
+) -> Optional[ClassGroup]:
+    """Creates a class group record using data and the provided teacher ID."""
     collection = _get_collection(CLASSGROUP_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
     new_id = uuid.uuid4()
-    doc = class_group_in.model_dump(); doc["_id"] = new_id; doc.setdefault("student_ids", [])
+    doc = class_group_in.model_dump();
+    doc["_id"] = new_id;
+    doc["teacher_id"] = teacher_id # ADD the passed teacher_id to the document
+    doc.setdefault("student_ids", [])
     doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
-    logger.info(f"Inserting class group: {doc['_id']}")
-    try: inserted_result = await collection.insert_one(doc, session=session)
+    logger.info(f"Inserting class group: {doc['_id']} for teacher: {teacher_id}")
+    try: inserted_result = await collection.insert_one(doc, session=session) # Pass session if provided
     except Exception as e: logger.error(f"Error inserting class group: {e}", exc_info=True); return None
     if inserted_result.acknowledged: created_doc = await collection.find_one({"_id": new_id}, session=session)
     else: logger.error(f"Insert class group not acknowledged: {new_id}"); return None
@@ -400,12 +407,12 @@ async def get_all_class_groups( teacher_id: Optional[uuid.UUID] = None, school_i
     try:
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
-             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 else: logger.warning(f"ClassGroup doc missing '_id': {doc}"); continue
-                 items_list.append(ClassGroup(**mapped_data))
-             except Exception as validation_err: logger.error(f"Pydantic validation failed for class group doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
+            try:
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                else: logger.warning(f"ClassGroup doc missing '_id': {doc}"); continue
+                items_list.append(ClassGroup(**mapped_data))
+            except Exception as validation_err: logger.error(f"Pydantic validation failed for class group doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e: logger.error(f"Error getting all class groups: {e}", exc_info=True)
     return items_list
 
@@ -437,14 +444,111 @@ async def delete_class_group(class_group_id: uuid.UUID, hard_delete: bool = Fals
     try:
         if hard_delete: result = await collection.delete_one({"_id": class_group_id}, session=session); count = result.deleted_count # Query by _id
         else:
-             now = datetime.now(timezone.utc)
-             result = await collection.update_one({"_id": class_group_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
+            now = datetime.now(timezone.utc)
+            result = await collection.update_one({"_id": class_group_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
     except Exception as e: logger.error(f"Error deleting class group: {e}", exc_info=True); return False
     if count == 1: return True
     else: logger.warning(f"Class group {class_group_id} not found or already deleted."); return False
 
+# --- START: NEW CRUD FUNCTIONS for ClassGroup <-> Student Relationship ---
+@with_transaction
+async def add_student_to_class_group(
+    class_group_id: uuid.UUID, student_id: uuid.UUID, session=None
+) -> bool:
+    """Adds a student ID to the student_ids array of a specific class group.
 
-# --- Student CRUD Functions (Assume these exist as before) ---
+    Uses $addToSet to prevent duplicates.
+
+    Returns:
+        bool: True if the student was added or already existed, False on error or if class not found.
+    """
+    collection = _get_collection(CLASSGROUP_COLLECTION)
+    if collection is None:
+        return False
+    now = datetime.now(timezone.utc)
+    logger.info(f"Attempting to add student {student_id} to class group {class_group_id}")
+    query_filter = {"_id": class_group_id, "deleted_at": None}
+    update_operation = {
+        "$addToSet": {"student_ids": student_id},  # Use $addToSet to avoid duplicates
+        "$set": {"updated_at": now},
+    }
+    try:
+        result = await collection.update_one(
+            query_filter, update_operation, session=session
+        )
+        # update_one returns matched_count and modified_count.
+        # If matched_count is 1, the class group was found.
+        # modified_count will be 1 if added, 0 if student already existed. Both are success cases here.
+        if result.matched_count == 1:
+            logger.info(
+                f"Student {student_id} added to (or already in) class group {class_group_id}. Modified count: {result.modified_count}"
+            )
+            return True
+        else:
+            logger.warning(
+                f"Class group {class_group_id} not found or already deleted when trying to add student {student_id}."
+            )
+            return False
+    except Exception as e:
+        logger.error(
+            f"Error adding student {student_id} to class group {class_group_id}: {e}",
+            exc_info=True,
+        )
+        return False
+
+
+@with_transaction
+async def remove_student_from_class_group(
+    class_group_id: uuid.UUID, student_id: uuid.UUID, session=None
+) -> bool:
+    """Removes a student ID from the student_ids array of a specific class group.
+
+    Uses $pull operator.
+
+    Returns:
+        bool: True if the student was successfully removed, False otherwise (e.g., class not found, student not in class).
+    """
+    collection = _get_collection(CLASSGROUP_COLLECTION)
+    if collection is None:
+        return False
+    now = datetime.now(timezone.utc)
+    logger.info(f"Attempting to remove student {student_id} from class group {class_group_id}")
+    query_filter = {"_id": class_group_id, "deleted_at": None}
+    update_operation = {
+        "$pull": {"student_ids": student_id},  # Use $pull to remove the specific student ID
+        "$set": {"updated_at": now},
+    }
+    try:
+        result = await collection.update_one(
+            query_filter, update_operation, session=session
+        )
+        # We need modified_count to be 1 for a successful removal.
+        # If matched_count is 1 but modified_count is 0, the student wasn't in the list.
+        if result.modified_count == 1:
+            logger.info(
+                f"Successfully removed student {student_id} from class group {class_group_id}."
+            )
+            return True
+        elif result.matched_count == 1:
+             logger.warning(
+                f"Student {student_id} was not found in class group {class_group_id} for removal."
+            )
+             # Decide if this is a success (idempotency) or failure. Let's return False for clarity.
+             return False
+        else:
+            logger.warning(
+                f"Class group {class_group_id} not found or already deleted when trying to remove student {student_id}."
+            )
+            return False
+    except Exception as e:
+        logger.error(
+            f"Error removing student {student_id} from class group {class_group_id}: {e}",
+            exc_info=True,
+        )
+        return False
+# --- END: NEW CRUD FUNCTIONS for ClassGroup <-> Student Relationship ---
+
+# --- Student CRUD Functions (Keep existing) ---
 @with_transaction
 async def create_student(student_in: StudentCreate, session=None) -> Optional[Student]:
     collection = _get_collection(STUDENT_COLLECTION); now = datetime.now(timezone.utc)
@@ -466,7 +570,7 @@ async def create_student(student_in: StudentCreate, session=None) -> Optional[St
                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
                 return Student(**mapped_data)
             else:
-                 logger.error(f"Failed retrieve student post-insert: {internal_id}"); return None
+                logger.error(f"Failed retrieve student post-insert: {internal_id}"); return None
         else:
             logger.error(f"Insert student not acknowledged: {internal_id}"); return None
     except DuplicateKeyError:
@@ -561,7 +665,7 @@ async def delete_student(student_internal_id: uuid.UUID, hard_delete: bool = Fal
     else: logger.warning(f"Student {student_internal_id} not found or already deleted."); return False
 
 
-# --- Assignment CRUD Functions (Assume these exist as before) ---
+# --- Assignment CRUD Functions (Keep existing) ---
 @with_transaction
 async def create_assignment(assignment_in: AssignmentCreate, session=None) -> Optional[Assignment]:
     collection = _get_collection(ASSIGNMENT_COLLECTION); now = datetime.now(timezone.utc)
@@ -597,10 +701,10 @@ async def get_all_assignments( class_group_id: Optional[uuid.UUID] = None, skip:
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 else: logger.warning(f"Assignment doc missing '_id': {doc}"); continue
-                 assignments_list.append(Assignment(**mapped_data))
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                else: logger.warning(f"Assignment doc missing '_id': {doc}"); continue
+                assignments_list.append(Assignment(**mapped_data))
             except Exception as validation_err: logger.error(f"Pydantic validation failed for assignment doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e: logger.error(f"Error getting all assignments: {e}", exc_info=True)
     return assignments_list
@@ -636,7 +740,7 @@ async def delete_assignment(assignment_id: uuid.UUID, hard_delete: bool = False,
     else: logger.warning(f"Assignment {assignment_id} not found or already deleted."); return False
 
 
-# --- Document CRUD Functions (Assume these exist as before) ---
+# --- Document CRUD Functions (Keep existing) ---
 # @with_transaction # Keep transaction commented out if needed for collection creation
 async def create_document(document_in: DocumentCreate, session=None) -> Optional[Document]:
     collection = _get_collection(DOCUMENT_COLLECTION)
@@ -676,12 +780,12 @@ async def get_all_documents( student_id: Optional[uuid.UUID] = None, assignment_
     try:
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
-             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 else: logger.warning(f"Document doc missing '_id': {doc}"); continue
-                 documents_list.append(Document(**mapped_data))
-             except Exception as validation_err: logger.error(f"Pydantic validation failed for document doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
+            try:
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                else: logger.warning(f"Document doc missing '_id': {doc}"); continue
+                documents_list.append(Document(**mapped_data))
+            except Exception as validation_err: logger.error(f"Pydantic validation failed for document doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e: logger.error(f"Error getting all documents: {e}", exc_info=True)
     return documents_list
 
@@ -714,7 +818,7 @@ async def delete_document(document_id: uuid.UUID, hard_delete: bool = False, ses
     if count == 1: return True
     else: logger.warning(f"Document metadata {document_id} not found or already deleted."); return False
 
-# --- Result CRUD Functions (Assume these exist as before) ---
+# --- Result CRUD Functions (Keep existing) ---
 # @with_transaction # Keep transaction commented out if needed
 async def create_result(result_in: ResultCreate, session=None) -> Optional[Result]:
     collection = _get_collection(RESULT_COLLECTION)
@@ -784,7 +888,7 @@ async def delete_result(result_id: uuid.UUID, hard_delete: bool = False, session
     if count == 1: return True
     else: logger.warning(f"Result {result_id} not found or already deleted."); return False
 
-# --- Bulk Operations (Assume these exist as before) ---
+# --- Bulk Operations (Keep existing) ---
 @with_transaction
 async def bulk_create_schools(schools_in: List[SchoolCreate], session=None) -> List[School]:
     collection = _get_collection(SCHOOL_COLLECTION)
@@ -814,8 +918,8 @@ async def bulk_update_schools(updates: List[Dict[str, Any]], session=None) -> Li
         for update_item in updates:
             school_id = update_item.get("id"); update_model_data = update_item.get("data")
             if not isinstance(school_id, uuid.UUID) or not isinstance(update_model_data, dict):
-                 logger.warning(f"Skipping invalid item in bulk update: id={school_id}, data_type={type(update_model_data)}")
-                 continue
+                logger.warning(f"Skipping invalid item in bulk update: id={school_id}, data_type={type(update_model_data)}")
+                continue
             try: update_model = SchoolUpdate.model_validate(update_model_data)
             except Exception as validation_err: logger.warning(f"Skipping item due to validation error for school {school_id}: {validation_err}"); continue
 
@@ -842,7 +946,7 @@ async def bulk_delete_schools(school_ids: List[uuid.UUID], hard_delete: bool = F
         logger.info(f"Successfully {'hard' if hard_delete else 'soft'} deleted {deleted_count} schools"); return deleted_count
     except Exception as e: logger.error(f"Error during bulk school deletion: {e}", exc_info=True); return 0
 
-# --- Advanced Filtering Support (Assume these exist as before) ---
+# --- Advanced Filtering Support (Keep existing) ---
 class FilterOperator:
     EQUALS = "$eq"; NOT_EQUALS = "$ne"; GREATER_THAN = "$gt"; LESS_THAN = "$lt"
     GREATER_THAN_EQUALS = "$gte"; LESS_THAN_EQUALS = "$lte"; IN = "$in"; NOT_IN = "$nin"
@@ -861,14 +965,21 @@ def build_filter_query(filters: Dict[str, Any], include_deleted: bool = False) -
     query.update(soft_delete_filter(include_deleted))
     return query
 
-# --- Relationship Validation (Assume these exist as before) ---
+# --- Relationship Validation (Keep existing) ---
 async def validate_school_teacher_relationship( school_id: uuid.UUID, teacher_id: uuid.UUID, session=None) -> bool:
-    teacher = await get_teacher_by_id(teacher_id, include_deleted=False, session=session)
+    teacher = await get_teacher_by_kinde_id(kinde_id=str(teacher_id), include_deleted=False, session=session) # Assuming teacher_id is Kinde ID string
+    # Adjust based on how teacher ID is stored/passed
     return teacher is not None and teacher.school_id == school_id # Ensure teacher is not None
 
 async def validate_class_group_relationships( class_group_id: uuid.UUID, teacher_id: uuid.UUID, school_id: uuid.UUID, session=None) -> bool:
     class_group = await get_class_group_by_id(class_group_id, include_deleted=False, session=session)
     if class_group is None: return False
+    # Assuming teacher_id passed is the internal UUID (_id) stored in ClassGroup
+    # If teacher_id passed is Kinde ID, fetch teacher by Kinde ID first
+    # teacher = await get_teacher_by_kinde_id(kinde_id=str(teacher_id), session=session)
+    # if teacher is None: return False
+    # if not await validate_school_teacher_relationship(school_id, teacher.id, session=session): return False # Validate using internal teacher ID
+    # For now, assume teacher_id is the internal UUID
     if not await validate_school_teacher_relationship(school_id, teacher_id, session=session): return False
     return (class_group.teacher_id == teacher_id and class_group.school_id == school_id)
 
@@ -877,7 +988,7 @@ async def validate_student_class_group_relationship( student_id: uuid.UUID, clas
     # Ensure class_group.student_ids exists and is a list before checking 'in'
     return class_group is not None and isinstance(class_group.student_ids, list) and student_id in class_group.student_ids
 
-# --- Enhanced Query Functions (Assume these exist as before) ---
+# --- Enhanced Query Functions (Keep existing) ---
 async def get_schools_with_filters(
     filters: Dict[str, Any], include_deleted: bool = False, skip: int = 0,
     limit: int = 100, sort_by: Optional[str] = None, sort_order: int = 1, session=None
@@ -885,7 +996,6 @@ async def get_schools_with_filters(
     collection = _get_collection(SCHOOL_COLLECTION)
     if collection is None: return []
     query = build_filter_query(filters, include_deleted)
-    # Use _id for sorting if 'id' is passed, assuming alias handling in schema output
     sort_field = "_id" if sort_by == "id" else sort_by
     sort_criteria = [(sort_field, sort_order)] if sort_field else None; schools = []
     try:
@@ -894,9 +1004,9 @@ async def get_schools_with_filters(
         cursor = cursor.skip(skip).limit(limit)
         async for doc in cursor:
             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 schools.append(School(**mapped_data))
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                schools.append(School(**mapped_data))
             except Exception as validation_err: logger.error(f"Pydantic validation failed for school doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
         logger.info(f"Retrieved {len(schools)} schools with filters")
         return schools
@@ -914,9 +1024,9 @@ async def get_teachers_by_school(
         cursor = collection.find(query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
             try:
-                 mapped_data = {**doc}
-                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                 teachers.append(Teacher(**mapped_data))
+                mapped_data = {**doc}
+                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
+                teachers.append(Teacher(**mapped_data))
             except Exception as validation_err: logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
         logger.info(f"Retrieved {len(teachers)} teachers for school {school_id}")
         return teachers
@@ -924,3 +1034,4 @@ async def get_teachers_by_school(
 
 # --- Final Placeholder ---
 # (All core entities now have basic CRUD with consistent pattern, applied explicit _id->id mapping for list returns)
+ 
