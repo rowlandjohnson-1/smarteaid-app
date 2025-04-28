@@ -18,8 +18,9 @@ from .database import get_database
 
 # --- Pydantic Models ---
 from ..models.school import SchoolCreate, SchoolUpdate, School
-# --- Use the updated Teacher models ---
-from ..models.teacher import Teacher, TeacherCreate, TeacherUpdate
+# --- CORRECTED Teacher model imports ---
+# Import TeacherCreate as defined in your teacher.py
+from ..models.teacher import Teacher, TeacherCreate, TeacherUpdate, TeacherRole
 # ------------------------------------
 from ..models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
 from ..models.student import Student, StudentCreate, StudentUpdate
@@ -27,8 +28,7 @@ from ..models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
 from ..models.document import Document, DocumentCreate, DocumentUpdate
 from ..models.result import Result, ResultCreate, ResultUpdate
 # --- Import Enums used in Teacher model ---
-from ..models.enums import DocumentStatus, ResultStatus, FileType, TeacherRole, MarketingSource
-# ----------------------------------------
+from ..models.enums import DocumentStatus, ResultStatus, FileType, MarketingSource
 
 # --- Logging Setup ---
 logger = logging.getLogger(__name__)
@@ -42,41 +42,68 @@ ASSIGNMENT_COLLECTION = "assignments"
 DOCUMENT_COLLECTION = "documents"
 RESULT_COLLECTION = "results"
 
-# --- Transaction and Helper Functions (Assume these exist as before) ---
+# --- Transaction and Helper Functions ---
 @asynccontextmanager
 async def transaction():
     db = get_database()
     if db is None: raise RuntimeError("Database connection not available for transaction (db is None)")
-    if not db.client: raise RuntimeError("Database client not available for session")
+    if not hasattr(db, 'client') or db.client is None:
+         logger.warning("Database client not available or does not support sessions. Proceeding without transaction.")
+         yield None
+         return # Exit context manager
     if hasattr(db.client, 'start_session'):
-        async with await db.client.start_session() as session:
-            async with session.start_transaction():
-                logger.debug("MongoDB transaction started.")
-                try:
-                    yield session
-                    logger.debug("MongoDB transaction committing.")
-                except Exception as e:
-                    logger.error(f"MongoDB transaction aborted due to error: {e}", exc_info=True)
-                    await session.abort_transaction()
-                    logger.debug("MongoDB transaction explicitly aborted.")
-                    raise
+        session = None # Initialize session to None
+        try:
+            async with await db.client.start_session() as session:
+                async with session.start_transaction():
+                    logger.debug("MongoDB transaction started.")
+                    try:
+                        yield session
+                        if session.in_transaction:
+                             logger.debug("MongoDB transaction committing.")
+                             await session.commit_transaction()
+                             logger.debug("MongoDB transaction committed.")
+                        else:
+                             logger.warning("Session not in transaction at commit point.")
+                    except Exception as e:
+                        logger.error(f"MongoDB transaction aborted due to error: {e}", exc_info=True)
+                        if session and session.in_transaction:
+                            await session.abort_transaction()
+                            logger.debug("MongoDB transaction explicitly aborted.")
+                        raise
+        except Exception as outer_e:
+             # Catch potential errors starting the session itself
+             logger.error(f"Failed to start MongoDB session or transaction: {outer_e}", exc_info=True)
+             raise # Re-raise the exception that occurred during session/transaction start
+
     else:
         logger.warning("Database client does not support sessions/transactions. Proceeding without transaction.")
         yield None
 
+
 def with_transaction(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
+        # Check if a session is already provided (nested transaction)
         session = kwargs.get('session')
         if session is not None:
+            # If called within an existing transaction, just execute the function
+            logger.debug(f"Function {func.__name__} called within existing session.")
             return await func(*args, **kwargs)
         else:
+            # If no session provided, start a new one (or proceed without if not supported)
             try:
                 async with transaction() as new_session:
+                    # Pass the new session (or None if transactions not supported) to the function
                     kwargs['session'] = new_session
-                    return await func(*args, **kwargs)
+                    logger.debug(f"Function {func.__name__} starting with new/no session.")
+                    result = await func(*args, **kwargs)
+                    logger.debug(f"Function {func.__name__} completed within new/no session.")
+                    return result
             except Exception as e:
-                logger.error(f"Transaction failed or not supported for function {func.__name__}: {e}")
+                # Log error from transaction context or the function itself
+                logger.error(f"Operation failed for function {func.__name__}: {e}", exc_info=True)
+                # Decide what to return on failure. None is common.
                 return None
     return wrapper
 
@@ -90,7 +117,7 @@ def _get_collection(collection_name: str) -> Optional[AsyncIOMotorCollection]:
     logger.error("Database connection is not available (db object is None). Cannot get collection.")
     return None
 
-# --- School CRUD Functions (Assume these exist as before) ---
+# --- School CRUD Functions ---
 @with_transaction
 async def create_school(school_in: SchoolCreate, session=None) -> Optional[School]:
     collection = _get_collection(SCHOOL_COLLECTION); now = datetime.now(timezone.utc)
@@ -164,65 +191,84 @@ async def delete_school(school_id: uuid.UUID, hard_delete: bool = False, session
 
 
 # --- Teacher CRUD Functions ---
-@with_transaction
-async def create_teacher(teacher_in: TeacherCreate, kinde_id: str, session=None) -> Optional[Teacher]:
-    """Creates a teacher record, linking it to a Kinde ID."""
+# --- UPDATED create_teacher function signature ---
+# @with_transaction # Keep commented out if transactions cause issues
+async def create_teacher(
+    teacher_in: TeacherCreate, # Use TeacherCreate as defined in teacher.py
+    kinde_id: str,             # Pass kinde_id separately
+    session=None
+) -> Optional[Teacher]:
+    """
+    Creates a teacher record, linking it to a Kinde ID.
+    Uses data from TeacherCreate model (typically called by webhook/backend process).
+    """
+    # If not using transaction, session will be None here
+    if session:
+         logger.debug("create_teacher called within an existing session.")
+    else:
+         logger.warning("create_teacher called WITHOUT an active session (transaction decorator removed/disabled).")
+
     collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
 
-    # Assuming the primary key (_id) for Teacher should be the Kinde user ID ('sub')
-    try:
-        user_id = uuid.UUID(kinde_id) # Use Kinde ID as the primary UUID key
-    except (ValueError, TypeError):
-        logger.error(f"Invalid Kinde ID format '{kinde_id}' provided for new teacher.")
-        return None # Or raise a specific error
+    # Generate a new internal UUID for the teacher record (_id)
+    internal_id = uuid.uuid4()
 
-    teacher_doc = teacher_in.model_dump();
-    teacher_doc["_id"] = user_id # Use Kinde UUID as the primary key _id
-    teacher_doc["user_id"] = user_id # Also store it in user_id field if model expects it
-    teacher_doc["kinde_id"] = kinde_id # Store the original string Kinde ID if needed
+    # Create the document to insert using data from TeacherCreate
+    teacher_doc = teacher_in.model_dump() # Dump all fields from TeacherCreate
+    teacher_doc["_id"] = internal_id      # Set internal DB ID
+    teacher_doc["kinde_id"] = kinde_id    # Add the Kinde ID
 
+    # Set timestamps and soft delete status
     teacher_doc["created_at"] = now; teacher_doc["updated_at"] = now; teacher_doc["deleted_at"] = None
-    logger.info(f"Inserting teacher with ID (from Kinde sub): {teacher_doc['_id']}")
+
+    # Ensure defaults from TeacherBase are applied if not explicitly in TeacherCreate dump
+    # Pydantic v2 model_dump includes defaults by default
+    # We might need explicit conversion for enums if use_enum_values=False in model
+    if isinstance(teacher_doc.get("role"), TeacherRole):
+        teacher_doc["role"] = teacher_doc["role"].value # Store the string value
+    if "is_active" not in teacher_doc: # Ensure default is set if not present
+        teacher_doc["is_active"] = True
+
+    logger.info(f"Inserting teacher with internal ID: {internal_id}, Kinde ID: {kinde_id}")
     try:
+        # Insert the document into the collection (pass session if available)
         inserted_result = await collection.insert_one(teacher_doc, session=session)
     except DuplicateKeyError:
-        logger.warning(f"Teacher record with ID {user_id} already exists.")
-        # Optionally fetch and return existing record or handle as error
-        return await get_teacher_by_id(user_id=user_id, session=session)
+        # This assumes you have a unique index on 'kinde_id'
+        logger.warning(f"Teacher record with Kinde ID {kinde_id} already exists.")
+        # Fetch and return existing record instead of failing
+        return await get_teacher_by_kinde_id(kinde_id=kinde_id, session=session)
     except Exception as e:
+        # Handle other potential database errors
         logger.error(f"Error inserting teacher: {e}", exc_info=True); return None
 
+    # Verify insertion and fetch the created document using the internal ID
     if inserted_result.acknowledged:
-        created_doc = await collection.find_one({"_id": user_id}, session=session)
+        # Fetch outside the transaction if session is None, or use session if provided
+        created_doc = await collection.find_one({"_id": internal_id}, session=session)
         if created_doc:
-            # Map _id back to user_id for Pydantic model
-            mapped_data = {**created_doc}
-            if "_id" in mapped_data: mapped_data["user_id"] = mapped_data.pop("_id")
-            return Teacher(**mapped_data)
+            return Teacher(**created_doc) # Pydantic will handle the _id to id mapping
         else:
-            logger.error(f"Failed retrieve teacher post-insert: {user_id}"); return None
+            logger.error(f"Failed retrieve teacher post-insert: internal ID {internal_id}"); return None
     else:
-        logger.error(f"Insert teacher not acknowledged: {user_id}"); return None
+        logger.error(f"Insert teacher not acknowledged: internal ID {internal_id}"); return None
+# --- END UPDATED create_teacher ---
 
-
-async def get_teacher_by_id(user_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Teacher]:
+async def get_teacher_by_kinde_id(kinde_id: str, include_deleted: bool = False, session=None) -> Optional[Teacher]:
+    """Retrieves a teacher profile using their Kinde ID."""
     collection = _get_collection(TEACHER_COLLECTION);
     if collection is None: return None
-    # Use _id for query as that's the DB primary key
-    logger.info(f"Getting teacher by user_id: {user_id}")
-    query = {"_id": user_id}; query.update(soft_delete_filter(include_deleted))
+    logger.info(f"Getting teacher by kinde_id: {kinde_id}")
+    query = {"kinde_id": kinde_id}; query.update(soft_delete_filter(include_deleted))
     try:
         teacher_doc = await collection.find_one(query, session=session)
         if teacher_doc:
-             # Map _id back to user_id for Pydantic model
-            mapped_data = {**teacher_doc}
-            if "_id" in mapped_data: mapped_data["user_id"] = mapped_data.pop("_id")
-            return Teacher(**mapped_data) # Assumes schema handles alias correctly now
+            return Teacher(**teacher_doc)
         else:
-            logger.warning(f"Teacher {user_id} not found."); return None
+            logger.warning(f"Teacher with Kinde ID {kinde_id} not found."); return None
     except Exception as e:
-        logger.error(f"Error getting teacher: {e}", exc_info=True); return None
+        logger.error(f"Error getting teacher by Kinde ID: {e}", exc_info=True); return None
 
 async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Teacher]:
     collection = _get_collection(TEACHER_COLLECTION); teachers_list: List[Teacher] = []
@@ -230,99 +276,92 @@ async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: boo
     query = soft_delete_filter(include_deleted)
     logger.info(f"Getting all teachers skip={skip} limit={limit}")
     try:
-        cursor = collection.find(query, session=session).skip(skip).limit(limit)
+        # Fetch without session
+        cursor = collection.find(query).skip(skip).limit(limit)
         async for doc in cursor:
              try:
-                 mapped_data = {**doc}
-                 # --- Ensure _id is mapped to user_id for the Teacher model ---
-                 if "_id" in mapped_data:
-                     mapped_data["user_id"] = mapped_data.pop("_id") # Map _id to user_id
-                 else:
-                     logger.warning(f"Teacher doc missing '_id': {doc}"); continue
-                 # -------------------------------------------------------------
-                 teachers_list.append(Teacher(**mapped_data))
+                 teachers_list.append(Teacher(**doc))
              except Exception as validation_err:
                  logger.error(f"Pydantic validation failed for teacher doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
     except Exception as e:
         logger.error(f"Error getting all teachers: {e}", exc_info=True)
     return teachers_list
 
-# --- UPDATED update_teacher Function ---
-@with_transaction
-async def update_teacher(user_id: uuid.UUID, teacher_in: TeacherUpdate, session=None) -> Optional[Teacher]:
+# Update function remains largely the same, uses TeacherUpdate model
+@with_transaction # Keep transaction for update as it modifies existing data
+async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None) -> Optional[Teacher]:
+    """Updates a teacher's profile information identified by their Kinde ID."""
     collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
 
-    # Get update data, excluding fields not set in the input model
-    # Use model_dump for Pydantic V2
     update_data = teacher_in.model_dump(exclude_unset=True)
 
-    # Convert enums to their values if necessary for DB storage
-    # (Depends on if your DB driver handles enums directly or needs values)
-    if 'role' in update_data and isinstance(update_data['role'], TeacherRole):
+    if 'role' in update_data and isinstance(update_data.get('role'), TeacherRole):
         update_data['role'] = update_data['role'].value
 
-    # Remove fields that should not be updated directly or are handled by DB/logic
-    update_data.pop("_id", None) # Cannot update primary key
-    update_data.pop("id", None) # Cannot update alias if present
-    update_data.pop("user_id", None) # Should not update user_id link
-    update_data.pop("kinde_id", None) # Should not update kinde_id link
-    update_data.pop("created_at", None) # Should not update creation time
-    update_data.pop("deleted_at", None) # Soft delete handled separately
-    # Remove how_did_you_hear if it's not in TeacherUpdate
+    # Remove fields that should not be updated directly
+    update_data.pop("_id", None); update_data.pop("id", None)
+    update_data.pop("kinde_id", None)
+    update_data.pop("created_at", None); update_data.pop("deleted_at", None)
     update_data.pop("how_did_you_hear", None)
+    update_data.pop("email", None) # Don't allow email update via profile
 
-
-    # Check if there's anything left to update
     if not update_data:
-        logger.warning(f"No update data provided for teacher {user_id}")
-        # Return the current teacher data if no changes were requested
-        return await get_teacher_by_id(user_id, include_deleted=False, session=session)
+        logger.warning(f"No valid update data provided for teacher with Kinde ID {kinde_id}")
+        # Fetch without session if called outside transaction
+        return await get_teacher_by_kinde_id(kinde_id=kinde_id, include_deleted=False, session=session)
 
-    # Add the update timestamp
     update_data["updated_at"] = now
-    logger.info(f"Updating teacher {user_id} with data: {update_data}")
+    logger.info(f"Updating teacher with Kinde ID {kinde_id} with data: {update_data}")
 
-    # Define the filter to find the correct teacher document (_id is the primary key)
-    query_filter = {"_id": user_id, "deleted_at": None} # Ensure we don't update soft-deleted records
+    query_filter = {"kinde_id": kinde_id, "deleted_at": None}
 
     try:
-        # Perform the update and return the updated document
         updated_doc = await collection.find_one_and_update(
             query_filter,
             {"$set": update_data},
-            return_document=ReturnDocument.AFTER, # Return the document *after* the update
-            session=session
+            return_document=ReturnDocument.AFTER,
+            session=session # Pass session for transaction atomicity
         )
 
         if updated_doc:
-            # Map _id back to user_id before returning Pydantic model
-            mapped_data = {**updated_doc}
-            if "_id" in mapped_data:
-                mapped_data["user_id"] = mapped_data.pop("_id")
-            return Teacher(**mapped_data) # Validate and return
+            return Teacher(**updated_doc)
         else:
-            logger.warning(f"Teacher {user_id} not found or already deleted during update attempt.")
+            logger.warning(f"Teacher with Kinde ID {kinde_id} not found or already deleted during update attempt.")
             return None
     except Exception as e:
-        logger.error(f"Error during teacher update operation for {user_id}: {e}", exc_info=True)
+        logger.error(f"Error during teacher update operation for Kinde ID {kinde_id}: {e}", exc_info=True)
         return None
-# --- END UPDATED update_teacher Function ---
 
-@with_transaction
-async def delete_teacher(user_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
+@with_transaction # Keep transaction for delete
+async def delete_teacher(kinde_id: str, hard_delete: bool = False, session=None) -> bool:
+    """Deletes a teacher record identified by their Kinde ID."""
     collection = _get_collection(TEACHER_COLLECTION)
     if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting teacher {user_id}")
+    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting teacher with Kinde ID {kinde_id}")
     count = 0
+    query_filter = {"kinde_id": kinde_id}
     try:
-        if hard_delete: result = await collection.delete_one({"_id": user_id}, session=session); count = result.deleted_count # Query by _id
+        if hard_delete:
+            result = await collection.delete_one(query_filter, session=session);
+            count = result.deleted_count
         else:
             now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": user_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
-    except Exception as e: logger.error(f"Error deleting teacher: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Teacher {user_id} not found or already deleted."); return False
+            query_filter_soft = {"kinde_id": kinde_id, "deleted_at": None}
+            result = await collection.update_one(
+                query_filter_soft,
+                {"$set": {"deleted_at": now, "updated_at": now}},
+                session=session # Pass session
+            );
+            count = result.modified_count
+    except Exception as e:
+        logger.error(f"Error deleting teacher with Kinde ID {kinde_id}: {e}", exc_info=True); return False
+
+    if count == 1:
+        logger.info(f"Successfully {'hard' if hard_delete else 'soft'} deleted teacher with Kinde ID {kinde_id}")
+        return True
+    else:
+        logger.warning(f"Teacher with Kinde ID {kinde_id} not found or already deleted."); return False
 
 
 # --- ClassGroup CRUD Functions (Assume these exist as before) ---
@@ -355,8 +394,8 @@ async def get_all_class_groups( teacher_id: Optional[uuid.UUID] = None, school_i
     collection = _get_collection(CLASSGROUP_COLLECTION); items_list: List[ClassGroup] = []
     if collection is None: return items_list
     filter_query = soft_delete_filter(include_deleted)
-    if teacher_id: filter_query["teacher_id"] = teacher_id
-    if school_id: filter_query["school_id"] = school_id
+    if teacher_id: filter_query["teacher_id"] = teacher_id # Assuming ClassGroup stores teacher's internal UUID (_id/id)
+    # if school_id: filter_query["school_id"] = school_id # Assuming ClassGroup stores school's internal UUID (_id/id)
     logger.info(f"Getting all class groups filter={filter_query} skip={skip} limit={limit}")
     try:
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
@@ -377,6 +416,9 @@ async def update_class_group(class_group_id: uuid.UUID, class_group_in: ClassGro
     update_data = class_group_in.model_dump(exclude_unset=True)
     update_data.pop("_id", None); update_data.pop("id", None); # Pop internal 'id' if present
     update_data.pop("created_at", None); update_data.pop("deleted_at", None)
+    # Prevent changing teacher/school association via this update if needed
+    # update_data.pop("teacher_id", None)
+    # update_data.pop("school_id", None)
     if not update_data: logger.warning(f"No update data for class group {class_group_id}"); return await get_class_group_by_id(class_group_id, include_deleted=False, session=session)
     update_data["updated_at"] = now; logger.info(f"Updating class group {class_group_id}")
     query_filter = {"_id": class_group_id, "deleted_at": None} # Query by _id
