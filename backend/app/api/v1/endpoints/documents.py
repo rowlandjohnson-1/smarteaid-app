@@ -16,7 +16,9 @@ import httpx # Import httpx for making external API calls
 # Import models
 # Adjust path based on your structure if needed
 from ....models.document import Document, DocumentCreate, DocumentUpdate
-from ....models.result import Result, ResultCreate, ResultUpdate # Added Result model
+# --- Import ParagraphResult along with others ---
+from ....models.result import Result, ResultCreate, ResultUpdate, ParagraphResult
+# --- End Import ---
 # Ensure FileType is imported along with other enums
 from ....models.enums import DocumentStatus, ResultStatus, FileType
 
@@ -132,6 +134,7 @@ async def upload_document(
     # 3. Create initial Result record
     result_data = ResultCreate(
         score=None, status=ResultStatus.PENDING, result_timestamp=now, document_id=created_document.id
+        # paragraph_results will be None by default from the model
     )
     created_result = await crud.create_result(result_in=result_data)
     if not created_result:
@@ -197,7 +200,8 @@ async def trigger_assessment(
     await crud.update_document_status(document_id=document_id, status=DocumentStatus.PROCESSING)
     result = await crud.get_result_by_document_id(document_id=document_id)
     if result:
-        await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ASSESSING))
+        # --- Pass dictionary directly to crud.update_result ---
+        await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ASSESSING})
     else:
         # Handle case where result record didn't exist (should have been created on upload)
         logger.error(f"Result record missing for document {document_id} during assessment trigger.")
@@ -243,18 +247,20 @@ async def trigger_assessment(
         logger.error(f"Failed text extraction stage for document {document_id}: {e}", exc_info=True)
         # Update status to ERROR
         await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
-        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        # --- Pass dictionary directly to crud.update_result ---
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process document text: {e}")
 
     # --- Call External ML API ---
-    # Initialize variables to store extracted ML results
     ai_score: Optional[float] = None
     ml_label: Optional[str] = None
     ml_ai_generated: Optional[bool] = None
     ml_human_generated: Optional[bool] = None
+    # --- Store the RAW list of paragraph dicts ---
+    ml_paragraph_results_raw: Optional[List[Dict[str, Any]]] = None
+    # --- END ---
 
     try:
-        # Define payload for the ML API
         ml_payload = {"text": extracted_text if extracted_text else ""}
         headers = {'Content-Type': 'application/json'}
 
@@ -266,102 +272,100 @@ async def trigger_assessment(
             ml_response_data = response.json()
             logger.info(f"ML API response for document {document_id}: {ml_response_data}")
 
-            # --- MODIFIED: Extract score AND OTHER FIELDS from the actual response structure ---
             if isinstance(ml_response_data, dict):
-                # Extract top-level boolean flags
                 ml_ai_generated = ml_response_data.get("ai_generated")
                 ml_human_generated = ml_response_data.get("human_generated")
-                if not isinstance(ml_ai_generated, bool): ml_ai_generated = None # Ensure boolean or None
-                if not isinstance(ml_human_generated, bool): ml_human_generated = None # Ensure boolean or None
+                if not isinstance(ml_ai_generated, bool): ml_ai_generated = None
+                if not isinstance(ml_human_generated, bool): ml_human_generated = None
 
-                # Extract details from the first result item
-                if ("results" in ml_response_data and
-                    isinstance(ml_response_data["results"], list) and
-                    len(ml_response_data["results"]) > 0 and
-                    isinstance(ml_response_data["results"][0], dict)):
+                if ("results" in ml_response_data and isinstance(ml_response_data["results"], list)):
+                    # --- Store the raw list directly ---
+                    ml_paragraph_results_raw = ml_response_data["results"]
+                    logger.info(f"Extracted {len(ml_paragraph_results_raw)} raw paragraph results.")
+                    # --- END ---
 
-                    first_result = ml_response_data["results"][0]
-                    ml_label = first_result.get("label") # Get the label string
-                    if not isinstance(ml_label, str): ml_label = None # Ensure string or None
+                    if len(ml_paragraph_results_raw) > 0 and isinstance(ml_paragraph_results_raw[0], dict):
+                        first_result = ml_paragraph_results_raw[0]
+                        ml_label = first_result.get("label")
+                        if not isinstance(ml_label, str): ml_label = None
 
-                    score_value = first_result.get("probability")
-                    if isinstance(score_value, (int, float)):
-                        ai_score = float(score_value)
-                        ai_score = max(0.0, min(1.0, ai_score)) # Clamp score
-                        logger.info(f"Extracted AI probability score: {ai_score}")
-                    else:
-                        logger.warning(f"ML API returned non-numeric probability: {score_value} (type: {type(score_value)})")
-                        # Don't raise error, just proceed without score if format is wrong
-                        ai_score = None
-                else:
-                    logger.warning("ML API response missing 'results' list or first item structure.")
-                    # Proceed without score/label if results structure is missing/invalid
+                        score_value = first_result.get("probability")
+                        if isinstance(score_value, (int, float)):
+                            ai_score = float(score_value)
+                            ai_score = max(0.0, min(1.0, ai_score))
+                            logger.info(f"Extracted overall AI probability score from first paragraph: {ai_score}")
+                        else:
+                            logger.warning(f"ML API returned non-numeric probability in first result: {score_value}")
+                            ai_score = None
+                    else: logger.warning("ML API 'results' list is empty or first item is not a dict.")
+                else: logger.warning("ML API response missing 'results' list.")
+            else: raise ValueError("ML API response format unexpected (not a dict).")
 
-            else:
-                 logger.error(f"ML API response was not a dictionary: {ml_response_data}")
-                 raise ValueError("ML API response format unexpected (not a dict).")
-            # --- END MODIFICATION ---
-
+    # ... (error handling for ML API call remains the same) ...
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error calling ML API for document {document_id}: {e.response.status_code} - {e.response.text}", exc_info=False) # Log less verbosely for HTTP errors
+        logger.error(f"HTTP error calling ML API for document {document_id}: {e.response.status_code} - {e.response.text}", exc_info=False)
         await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
-        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        # --- Pass dictionary directly to crud.update_result ---
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error communicating with AI detection service: {e.response.status_code}")
-    except ValueError as e: # Catch specific ValueErrors raised during parsing
+    except ValueError as e:
         logger.error(f"Error processing ML API response for document {document_id}: {e}", exc_info=True)
         await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
-        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        # --- Pass dictionary directly to crud.update_result ---
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI detection result: {e}")
-    except Exception as e: # Catch any other unexpected errors
+    except Exception as e:
         logger.error(f"Unexpected error during ML API call or processing for document {document_id}: {e}", exc_info=True)
         await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
-        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        # --- Pass dictionary directly to crud.update_result ---
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get AI detection result: {e}")
 
-    # --- Update DB with Result (including new fields) ---
+
+    # --- Update DB with Result ---
     final_result: Optional[Result] = None
     try:
-        if result: # Check if result object exists
-            # Prepare update data - only include fields that have a value
-            update_payload = {
-                "status": ResultStatus.COMPLETED,
-                "result_timestamp": datetime.now(timezone.utc) # Update timestamp
+        if result:
+            # --- MODIFIED: Prepare a simple dictionary for the update ---
+            update_payload_dict = {
+                "status": ResultStatus.COMPLETED.value, # Store enum value
+                "result_timestamp": datetime.now(timezone.utc)
             }
-            if ai_score is not None:
-                update_payload["score"] = ai_score
-            if ml_label is not None:
-                update_payload["label"] = ml_label
-            if ml_ai_generated is not None:
-                update_payload["ai_generated"] = ml_ai_generated
-            if ml_human_generated is not None:
-                update_payload["human_generated"] = ml_human_generated
+            if ai_score is not None: update_payload_dict["score"] = ai_score
+            if ml_label is not None: update_payload_dict["label"] = ml_label
+            if ml_ai_generated is not None: update_payload_dict["ai_generated"] = ml_ai_generated
+            if ml_human_generated is not None: update_payload_dict["human_generated"] = ml_human_generated
+            # Add the raw list of paragraph dicts if available
+            if ml_paragraph_results_raw is not None:
+                 # Basic check: ensure it's a list of dicts before saving
+                 if isinstance(ml_paragraph_results_raw, list) and all(isinstance(item, dict) for item in ml_paragraph_results_raw):
+                     update_payload_dict["paragraph_results"] = ml_paragraph_results_raw
+                 else:
+                     logger.error(f"ml_paragraph_results_raw is not a list of dicts for doc {document_id}. Skipping save.")
 
-            # Use the ResultUpdate model to validate the payload before sending to CRUD
-            result_update_data = ResultUpdate(**update_payload)
-
-            # Call CRUD update function
-            final_result = await crud.update_result(result_id=result.id, result_in=result_update_data)
+            # --- Call CRUD update function with the dictionary ---
+            final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict) # Pass dict
 
             if final_result:
                 await crud.update_document_status(document_id=document_id, status=DocumentStatus.COMPLETED)
-                logger.info(f"Assessment completed for document {document_id}. Score: {ai_score}, Label: {ml_label}, AI: {ml_ai_generated}, Human: {ml_human_generated}")
+                logger.info(f"Assessment completed for document {document_id}. Score: {ai_score}, Label: {ml_label}, Paragraphs: {len(ml_paragraph_results_raw or [])}")
             else:
-                 logger.error(f"Failed to update result record {result.id} in database, record might be missing.")
+                 logger.error(f"Failed to update result record {result.id} in database, crud.update_result returned None.")
                  raise ValueError("Failed to update result record in database.")
         else:
-             # Should not happen if initial check passed
              logger.error(f"Result object became None unexpectedly for document {document_id}.")
              raise ValueError("Result record unavailable for update.")
 
+    # ... (error handling for DB update remains the same) ...
     except Exception as e:
         logger.error(f"Failed to update database after successful ML API call for document {document_id}: {e}", exc_info=True)
-        # Status might already be ERROR from previous steps, but ensure it is
         await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
-        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        # --- Pass dictionary directly to crud.update_result ---
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save assessment result.")
 
+
     if not final_result:
-         # Fallback error if update somehow failed without exception
          logger.error(f"Final result object is None after attempting DB update for doc {document_id}.")
          raise HTTPException(status_code=500, detail="Failed to retrieve final result after update.")
 

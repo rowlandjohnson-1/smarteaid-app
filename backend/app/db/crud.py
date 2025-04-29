@@ -530,11 +530,10 @@ async def remove_student_from_class_group(
             )
             return True
         elif result.matched_count == 1:
-             logger.warning(
+            logger.warning(
                 f"Student {student_id} was not found in class group {class_group_id} for removal."
             )
-             # Decide if this is a success (idempotency) or failure. Let's return False for clarity.
-             return False
+            return False
         else:
             logger.warning(
                 f"Class group {class_group_id} not found or already deleted when trying to remove student {student_id}."
@@ -846,47 +845,121 @@ async def get_result_by_id(result_id: uuid.UUID, include_deleted: bool = False, 
     if doc: return Result(**doc) # Assumes schema handles alias
     else: logger.warning(f"Result {result_id} not found."); return None
 
+@with_transaction
+async def update_result(result_id: uuid.UUID, update_data: Dict[str, Any], session=None) -> Optional[Result]:
+    """
+    Updates an existing Result record in the database using a raw dictionary.
+
+    Assumes 'paragraph_results' in update_data is already a list of dicts.
+    Includes enhanced logging.
+    """
+    collection = _get_collection(RESULT_COLLECTION)
+    if collection is None:
+        logger.error("Failed to get results collection for update.")
+        return None
+
+    now = datetime.now(timezone.utc)
+
+    # Log the raw data received by the function
+    logger.debug(f"crud.update_result received update_data for {result_id}: {update_data}")
+
+    # Prepare the dictionary for the $set operation
+    set_payload = {}
+
+    # Copy allowed fields from input update_data to set_payload
+    allowed_fields = ["score", "status", "label", "ai_generated", "human_generated", "paragraph_results", "result_timestamp"]
+    for field in allowed_fields:
+        if field in update_data and update_data[field] is not None:
+             # Special handling for status enum
+             if field == "status" and isinstance(update_data[field], ResultStatus):
+                 set_payload[field] = update_data[field].value # Store the enum value string
+             # --- FIX: Check for datetime for result_timestamp ---
+             elif field == "result_timestamp" and isinstance(update_data[field], datetime):
+                 set_payload[field] = update_data[field] # Store datetime object
+             # --- END FIX ---
+             else:
+                 set_payload[field] = update_data[field]
+
+    # Ensure 'paragraph_results' is a list of dicts if present
+    if "paragraph_results" in set_payload:
+        if not isinstance(set_payload["paragraph_results"], list) or \
+           not all(isinstance(item, dict) for item in set_payload["paragraph_results"]):
+            logger.warning(f"Invalid format for 'paragraph_results' in update data for {result_id}. Removing field.")
+            set_payload.pop("paragraph_results", None)
+        else:
+             logger.info(f"Preparing to save {len(set_payload['paragraph_results'])} paragraph results for {result_id}.")
+
+    # Check if there's anything left to update
+    if not set_payload:
+        logger.warning(f"No valid fields to update for result {result_id}")
+        # Return the existing document if no changes were made
+        return await get_result_by_id(result_id, include_deleted=False, session=session)
+
+    # Always set updated_at
+    set_payload["updated_at"] = now
+    # result_timestamp should be included in the incoming update_data if needed
+
+    logger.info(f"Updating result {result_id} with fields: {list(set_payload.keys())}")
+    # Log the exact payload for the $set operation
+    logger.debug(f"Payload for $set operation for result {result_id}: {set_payload}") # Check this log carefully
+
+    query_filter = {"_id": result_id, "deleted_at": None} # Query by internal _id
+
+    try:
+        # Perform the database update
+        updated_doc = await collection.find_one_and_update(
+            query_filter,
+            {"$set": set_payload}, # Use the prepared set_payload dictionary
+            return_document=ReturnDocument.AFTER, # Return the document *after* the update
+            session=session # Pass the session for transaction atomicity
+        )
+
+        # Process the result of the update
+        if updated_doc:
+            logger.info(f"Successfully updated result {result_id} in DB.")
+            logger.debug(f"Raw document returned from find_one_and_update for result {result_id}: {updated_doc}")
+            try:
+                # --- Use model_validate for potentially better error info ---
+                validated_result = Result.model_validate(updated_doc)
+                # --- End change ---
+                logger.debug(f"Validated Result object for {result_id} has paragraph_results: {'Yes' if validated_result.paragraph_results else 'No'}")
+                return validated_result
+            except Exception as pydantic_err:
+                logger.error(f"Pydantic validation failed for updated result {result_id} from DB: {pydantic_err}", exc_info=True)
+                return None # Failed validation
+        else:
+            logger.warning(f"Result {result_id} not found or already deleted during update attempt.")
+            return None
+    except Exception as e:
+        logger.error(f"Error updating result with ID {result_id}: {e}", exc_info=True)
+        return None
+
+# --- Optional: Add logging to get_result_by_document_id ---
 async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Result]:
     collection = _get_collection(RESULT_COLLECTION)
     if collection is None: return None
     logger.info(f"Getting result for document: {document_id}")
     query = {"document_id": document_id}; query.update(soft_delete_filter(include_deleted))
-    try: doc = await collection.find_one(query, session=session)
-    except Exception as e: logger.error(f"Error getting result by doc id: {e}", exc_info=True); return None
-    if doc: return Result(**doc) # Assumes schema handles alias
-    else: logger.info(f"Result for document {document_id} not found."); return None
-
-@with_transaction
-async def update_result(result_id: uuid.UUID, result_in: ResultUpdate, session=None) -> Optional[Result]:
-    collection = _get_collection(RESULT_COLLECTION)
-    if collection is None: return None
-    now = datetime.now(timezone.utc)
-    update_data = result_in.model_dump(exclude_unset=True)
-    if "status" in update_data and isinstance(update_data["status"], ResultStatus): update_data["status"] = update_data["status"].value
-    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("document_id", None); update_data.pop("deleted_at", None)
-    if not update_data: logger.warning(f"No update data for result {result_id}"); return await get_result_by_id(result_id, include_deleted=False, session=session)
-    update_data["updated_at"] = now; logger.info(f"Updating result {result_id}")
-    query_filter = {"_id": result_id, "deleted_at": None} # Query by _id
     try:
-        updated_doc = await collection.find_one_and_update(query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
-        if updated_doc: return Result(**updated_doc) # Assumes schema handles alias
-        else: logger.warning(f"Result {result_id} not found or already deleted for update."); return None
-    except Exception as e: logger.error(f"Error updating result with ID {result_id}: {e}", exc_info=True); return None
-
-@with_transaction
-async def delete_result(result_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
-    collection = _get_collection(RESULT_COLLECTION)
-    if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting result {result_id}")
-    count = 0
-    try:
-        if hard_delete: result = await collection.delete_one({"_id": result_id}, session=session); count = result.deleted_count # Query by _id
+        doc = await collection.find_one(query, session=session)
+        if doc:
+            logger.debug(f"Raw data fetched from DB for doc {document_id}: {doc}") # Log raw data
+            try:
+                # --- Use model_validate ---
+                validated_result = Result.model_validate(doc)
+                # --- End change ---
+                logger.debug(f"Validated Result object for doc {document_id} has paragraph_results: {'Yes' if validated_result.paragraph_results else 'No'}")
+                return validated_result
+            except Exception as pydantic_err:
+                 logger.error(f"Pydantic validation failed for result fetched for doc {document_id}: {pydantic_err}", exc_info=True)
+                 return None # Failed validation
         else:
-            now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": result_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
-    except Exception as e: logger.error(f"Error deleting result: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Result {result_id} not found or already deleted."); return False
+            logger.info(f"Result for document {document_id} not found.");
+            return None
+    except Exception as e:
+        logger.error(f"Error getting result by doc id {document_id}: {e}", exc_info=True);
+        return None
+# --- End optional logging ---
 
 # --- Bulk Operations (Keep existing) ---
 @with_transaction

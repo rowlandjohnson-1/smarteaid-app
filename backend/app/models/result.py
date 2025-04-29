@@ -1,33 +1,58 @@
 # app/models/result.py
 from pydantic import BaseModel, Field, ConfigDict # Added ConfigDict
-from typing import Optional
+from typing import Optional, List, Dict, Any # Added List, Dict, Any
 from datetime import datetime, timezone # Added timezone
 import uuid
-from app.models.enums import ResultStatus # Import Enum
+# Assuming enums.py is in the same directory or accessible via path
+from .enums import ResultStatus # Import Enum
 
-# Shared base properties
+# --- NEW: Model for a single paragraph result from ML API ---
+class ParagraphResult(BaseModel):
+    """Represents the analysis result for a single paragraph."""
+    paragraph: Optional[str] = Field(None, description="The text content of the paragraph")
+    label: Optional[str] = Field(None, description="Classification label for the paragraph (e.g., AI-Generated, Human-Written, Undetermined)")
+    probability: Optional[float] = Field(None, ge=0.0, le=1.0, description="AI detection probability score for the paragraph (0.0 to 1.0)")
+
+    # Allow extra fields if the API returns more than we explicitly define,
+    # although we only care about the ones defined above for now.
+    model_config = ConfigDict(extra='allow')
+
+
+# --- Updated ResultBase ---
 class ResultBase(BaseModel):
-    document_id: uuid.UUID = Field(..., description="Link to the Document model")
-    # Score as float between 0.0 and 1.0 (representing percentage)
-    score: Optional[float] = Field(None, ge=0.0, le=1.0, description="AI detection score (probability)")
+    """Base model for Result data, including fields from the ML API."""
+    document_id: uuid.UUID = Field(..., description="Link to the Document model this result belongs to")
+
+    # Overall Score: We'll store the probability from the first paragraph result here
+    # as the primary score, based on the API example.
+    score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Overall AI detection score (probability, typically from the first/main result)")
     status: ResultStatus = Field(default=ResultStatus.PENDING, description="Status of the analysis result")
 
-    # --- NEW FIELDS to store from ML API response ---
-    label: Optional[str] = Field(None, description="Classification label from the ML API (e.g., Human-Written, AI-Generated)")
-    ai_generated: Optional[bool] = Field(None, description="Boolean flag indicating if ML API classified as AI-generated")
-    human_generated: Optional[bool] = Field(None, description="Boolean flag indicating if ML API classified as human-generated")
-    # --- END NEW FIELDS ---
+    # Overall flags from the API response root
+    label: Optional[str] = Field(None, description="Overall classification label from the ML API (e.g., Human-Written, AI-Generated)")
+    ai_generated: Optional[bool] = Field(None, description="Overall boolean flag indicating if ML API classified as AI-generated")
+    human_generated: Optional[bool] = Field(None, description="Overall boolean flag indicating if ML API classified as human-generated")
+
+    # --- NEW FIELD: Store detailed paragraph results ---
+    # This field will hold the list of results for each paragraph.
+    paragraph_results: Optional[List[ParagraphResult]] = Field(default=None, description="Detailed analysis results per paragraph")
+    # --- END NEW FIELD ---
 
 
-# Properties required on creation (usually set internally)
+# Properties required on creation (usually set internally when upload happens)
 class ResultCreate(ResultBase):
-    # Inherits all fields from ResultBase
-    # Typically, only document_id and status=PENDING are set initially.
-    # Score and other fields are added later.
-    pass
+    """Model used when initially creating a Result record (typically with PENDING status)."""
+    # Set defaults for fields not known at initial creation
+    score: Optional[float] = None
+    label: Optional[str] = None
+    ai_generated: Optional[bool] = None
+    human_generated: Optional[bool] = None
+    paragraph_results: Optional[List[ParagraphResult]] = None
+    status: ResultStatus = ResultStatus.PENDING # Ensure status is PENDING on create
 
-# Properties stored in DB
+# Properties stored in DB (includes system fields)
 class ResultInDBBase(ResultBase):
+    """Base model representing how Result data is stored in the database."""
     id: uuid.UUID = Field(default_factory=uuid.uuid4, alias="_id", description="Internal unique identifier for the result")
     # Use result_timestamp for consistency with spec, default to now
     result_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the result was generated or last updated")
@@ -45,19 +70,23 @@ class ResultInDBBase(ResultBase):
 
 # Final model representing a Result read from DB (API Response)
 class Result(ResultInDBBase):
-    # Inherits all fields
+    """Complete Result model representing data retrieved from the database."""
+    # Inherits all fields from ResultInDBBase
     pass
 
-# Model for updating (mainly score, status, and new ML fields)
+# Model for updating (when ML analysis completes)
 class ResultUpdate(BaseModel):
+    """Model used when updating a Result record after ML analysis."""
+    # All fields are optional because we only update what we receive from the ML API
     score: Optional[float] = Field(None, ge=0.0, le=1.0)
     status: Optional[ResultStatus] = None
-    # --- NEW FIELDS for update ---
     label: Optional[str] = None
     ai_generated: Optional[bool] = None
     human_generated: Optional[bool] = None
-    # --- END NEW FIELDS ---
-    # Update result_timestamp when updating the result
+    # --- NEW FIELD for update ---
+    paragraph_results: Optional[List[ParagraphResult]] = None
+    # --- END NEW FIELD ---
+    # Update result_timestamp automatically when updating the result
     result_timestamp: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Pydantic V2 Config
