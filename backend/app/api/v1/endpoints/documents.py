@@ -1,4 +1,4 @@
-# app/api/v1/endpoints/documents.py
+# backend/app/api/v1/endpoints/documents.py
 
 import uuid
 import logging
@@ -9,13 +9,14 @@ from fastapi import (
     UploadFile, File, Form
 )
 # Add PlainTextResponse for the new endpoint's return type
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse # Added JSONResponse
 from datetime import datetime, timezone
+import httpx # Import httpx for making external API calls
 
 # Import models
 # Adjust path based on your structure if needed
 from ....models.document import Document, DocumentCreate, DocumentUpdate
-from ....models.result import ResultCreate, ResultUpdate
+from ....models.result import Result, ResultCreate, ResultUpdate # Added Result model
 # Ensure FileType is imported along with other enums
 from ....models.enums import DocumentStatus, ResultStatus, FileType
 
@@ -31,14 +32,24 @@ from ....services.blob_storage import upload_file_to_blob, download_blob_as_byte
 # Import Text Extraction Service
 from ....services.text_extraction import extract_text_from_bytes # Adjusted path
 
+# Import external API URL from config (assuming you add it there)
+# from ....core.config import ML_API_URL, ML_RECAPTCHA_SECRET # Placeholder - add these to config.py
+# --- TEMPORARY: Define URLs directly here until added to config ---
+# Use the URL provided by the user
+ML_API_URL="https://fa-sdt-uks-aitextdet-prod.azurewebsites.net/api/ai-text-detection?code=PZrMzMk1VBBCyCminwvgUfzv_YGhVU-5E1JIs2if7zqiAzFuMhUC-g%3D%3D"
+# ML_RECAPTCHA_SECRET="6LfAEWwqAAAAAKCk5TXLVa7L9tSY-850idoUwOgr" # Store securely if needed - currently unused
+# --- END TEMPORARY ---
+
+
 # Setup logger
 logger = logging.getLogger(__name__)
 
-# Create router
+# --- IMPORTANT: Define the router instance ---
 router = APIRouter(
     prefix="/documents",
     tags=["Documents"]
 )
+# --- End router definition ---
 
 # === Document API Endpoints (Protected) ===
 
@@ -60,7 +71,6 @@ async def upload_document(
     # === Add Authentication Dependency ===
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
-    # ... (upload_document function code remains the same) ...
     """
     Protected endpoint to upload a document, store it, create metadata,
     and initiate the analysis process.
@@ -87,10 +97,10 @@ async def upload_document(
     elif file_extension == ".txt" and file_type_enum is None: file_type_enum = FileType.TEXT
 
     if file_type_enum is None:
-         raise HTTPException(
-             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-             detail=f"Unsupported file type: {original_filename} ({content_type}). Supported types: PDF, DOCX, TXT, PNG, JPG/JPEG."
-         )
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type: {original_filename} ({content_type}). Supported types: PDF, DOCX, TXT, PNG, JPG/JPEG."
+        )
     # --- End File Type Validation ---
 
     # 1. Upload file to Blob Storage
@@ -99,8 +109,8 @@ async def upload_document(
         if blob_name is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,"Failed to upload file to storage.")
     except Exception as e:
-         logger.error(f"Error during file upload service call: {e}", exc_info=True)
-         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,"An error occurred during file upload processing.")
+        logger.error(f"Error during file upload service call: {e}", exc_info=True)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,"An error occurred during file upload processing.")
 
     # 2. Create Document metadata record in DB
     now = datetime.now(timezone.utc)
@@ -125,73 +135,241 @@ async def upload_document(
     )
     created_result = await crud.create_result(result_in=result_data)
     if not created_result:
-         logger.error(f"Failed to create initial pending result record for document {created_document.id}")
-         # Decide if this should cause the whole upload request to fail - maybe not?
+        logger.error(f"Failed to create initial pending result record for document {created_document.id}")
+        # Decide if this should cause the whole upload request to fail - maybe not?
 
     # 4. TODO: Trigger background task for analysis here (using created_document.id)
-    logger.info(f"Document {created_document.id} uploaded. Background analysis task should be triggered.")
+    # For now, assessment is triggered manually via the /assess endpoint
+    logger.info(f"Document {created_document.id} uploaded. Ready for assessment.")
 
     return created_document
 
 
 @router.post(
     "/{document_id}/assess",
-    # ... (trigger_assessment function code remains the same) ...
-    status_code=status.HTTP_202_ACCEPTED, # 202 Accepted indicates processing started
-    summary="Trigger AI Assessment (Simulated - Protected)",
-    description="Updates the document and result status to indicate analysis has started. "
-                "Does NOT actually call the ML API in this version. Requires authentication."
+    response_model=Result, # Return the final Result object
+    status_code=status.HTTP_200_OK, # Return 200 OK on successful assessment
+    summary="Trigger AI Assessment and get Result (Protected)",
+    description="Fetches document text, calls the external ML API for AI detection, "
+                "updates the result/document status, and returns the final result. "
+                "Requires authentication."
 )
 async def trigger_assessment(
     document_id: uuid.UUID,
-    # === Add Authentication Dependency ===
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """
-    Protected endpoint to simulate triggering the AI assessment for a document.
-    Updates status fields in the database.
+    Protected endpoint to trigger the AI assessment for a document.
+    Fetches text, calls external API, updates DB, returns result.
     """
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} attempting to trigger assessment for document ID: {document_id}")
 
-    # --- Authorization Check ---
+    # --- Get Document & Authorization Check ---
     document = await crud.get_document_by_id(document_id=document_id)
     if document is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document with ID {document_id} not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
+
     # TODO: Implement proper authorization check: Can user trigger assessment for this document?
     logger.warning(f"Authorization check needed for user {user_kinde_id} triggering assessment for document {document_id}")
-    # --- End Authorization Check ---
 
-    # Check against the Enum member directly
+    # Check if assessment can be triggered (e.g., only if UPLOADED or maybe ERROR)
     if document.status not in [DocumentStatus.UPLOADED, DocumentStatus.ERROR]:
-         # Log the string value if needed
-         logger.warning(f"Document {document_id} status is '{document.status}'. Cannot re-trigger assessment.")
-         return {"message": f"Assessment already initiated or completed for document {document_id}."}
+        logger.warning(f"Document {document_id} status is '{document.status}'. Assessment cannot be triggered.")
+        # Return the existing result instead of erroring if it's already completed/processing
+        existing_result = await crud.get_result_by_document_id(document_id=document_id)
+        if existing_result:
+            # Return 200 OK with the existing result if already completed or processing
+            if existing_result.status in [ResultStatus.COMPLETED, ResultStatus.ASSESSING]:
+                 logger.info(f"Assessment already completed or in progress for doc {document_id}. Returning existing result.")
+                 return existing_result
+            else:
+                 # If status is PENDING or ERROR, allow re-triggering below
+                 pass
+        else:
+            # This case is odd (doc status implies assessment happened, but no result found)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Assessment cannot be triggered. Document status is {document.status}, but no result found."
+            )
 
-    # 1. Update Document status to QUEUED
-    updated_doc = await crud.update_document_status(document_id=document_id, status=DocumentStatus.QUEUED)
-    if not updated_doc:
-        logger.error(f"Failed to update document {document_id} status to QUEUED.")
-        raise HTTPException(status_code=500, detail="Failed to update document status.")
-
-    # 2. Update associated Result status to ASSESSING
+    # --- Update Status to PROCESSING ---
+    await crud.update_document_status(document_id=document_id, status=DocumentStatus.PROCESSING)
     result = await crud.get_result_by_document_id(document_id=document_id)
     if result:
-        result_update_data = ResultUpdate(status=ResultStatus.ASSESSING)
-        updated_result = await crud.update_result(result_id=result.id, result_in=result_update_data)
-        if not updated_result:
-             logger.error(f"Failed to update result status to ASSESSING for document {document_id}, result {result.id}")
+        await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ASSESSING))
     else:
-         logger.error(f"No result record found for document {document_id} when triggering assessment.")
-         # Optionally create one here if it should always exist
+        # Handle case where result record didn't exist (should have been created on upload)
+        logger.error(f"Result record missing for document {document_id} during assessment trigger.")
+        # Create it now? Or raise error? Let's raise for now.
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR) # Revert doc status
+        raise HTTPException(status_code=500, detail="Internal error: Result record missing.")
 
-    logger.info(f"Simulated assessment triggered for document {document_id}. Status -> QUEUED.")
-    return {"message": "Assessment process initiated."}
+    # --- Text Extraction ---
+    extracted_text: Optional[str] = None
+    try:
+        # Convert file_type string back to Enum member if needed
+        file_type_enum_member: Optional[FileType] = None
+        if isinstance(document.file_type, str):
+            for member in FileType:
+                if member.value.lower() == document.file_type.lower():
+                    file_type_enum_member = member
+                    break
+        elif isinstance(document.file_type, FileType):
+            file_type_enum_member = document.file_type
+
+        if file_type_enum_member is None:
+            raise ValueError(f"Could not map file type '{document.file_type}' to enum.")
+
+        # Check if type is supported for text extraction
+        if file_type_enum_member not in [FileType.PDF, FileType.DOCX, FileType.TXT, FileType.TEXT]:
+             raise ValueError(f"Text extraction not supported for file type: {document.file_type}")
+
+        # Download bytes
+        file_bytes = await download_blob_as_bytes(blob_name=document.storage_blob_path)
+        if file_bytes is None:
+            raise ValueError(f"Failed to download blob '{document.storage_blob_path}'")
+
+        # Extract text
+        extracted_text = extract_text_from_bytes(file_bytes=file_bytes, file_type=file_type_enum_member)
+        if extracted_text is None:
+             # Handle case where extraction returns None for valid but empty/unextractable files
+             logger.warning(f"Text extraction returned None for document {document_id}. Treating as empty text.")
+             extracted_text = "" # Set to empty string to proceed
+
+        logger.info(f"Successfully extracted text ({len(extracted_text)} chars) for document {document_id}")
+
+    except Exception as e:
+        logger.error(f"Failed text extraction stage for document {document_id}: {e}", exc_info=True)
+        # Update status to ERROR
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process document text: {e}")
+
+    # --- Call External ML API ---
+    # Initialize variables to store extracted ML results
+    ai_score: Optional[float] = None
+    ml_label: Optional[str] = None
+    ml_ai_generated: Optional[bool] = None
+    ml_human_generated: Optional[bool] = None
+
+    try:
+        # Define payload for the ML API
+        ml_payload = {"text": extracted_text if extracted_text else ""}
+        headers = {'Content-Type': 'application/json'}
+
+        logger.info(f"Calling ML API for document {document_id} at {ML_API_URL}")
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(ML_API_URL, json=ml_payload, headers=headers)
+            response.raise_for_status()
+
+            ml_response_data = response.json()
+            logger.info(f"ML API response for document {document_id}: {ml_response_data}")
+
+            # --- MODIFIED: Extract score AND OTHER FIELDS from the actual response structure ---
+            if isinstance(ml_response_data, dict):
+                # Extract top-level boolean flags
+                ml_ai_generated = ml_response_data.get("ai_generated")
+                ml_human_generated = ml_response_data.get("human_generated")
+                if not isinstance(ml_ai_generated, bool): ml_ai_generated = None # Ensure boolean or None
+                if not isinstance(ml_human_generated, bool): ml_human_generated = None # Ensure boolean or None
+
+                # Extract details from the first result item
+                if ("results" in ml_response_data and
+                    isinstance(ml_response_data["results"], list) and
+                    len(ml_response_data["results"]) > 0 and
+                    isinstance(ml_response_data["results"][0], dict)):
+
+                    first_result = ml_response_data["results"][0]
+                    ml_label = first_result.get("label") # Get the label string
+                    if not isinstance(ml_label, str): ml_label = None # Ensure string or None
+
+                    score_value = first_result.get("probability")
+                    if isinstance(score_value, (int, float)):
+                        ai_score = float(score_value)
+                        ai_score = max(0.0, min(1.0, ai_score)) # Clamp score
+                        logger.info(f"Extracted AI probability score: {ai_score}")
+                    else:
+                        logger.warning(f"ML API returned non-numeric probability: {score_value} (type: {type(score_value)})")
+                        # Don't raise error, just proceed without score if format is wrong
+                        ai_score = None
+                else:
+                    logger.warning("ML API response missing 'results' list or first item structure.")
+                    # Proceed without score/label if results structure is missing/invalid
+
+            else:
+                 logger.error(f"ML API response was not a dictionary: {ml_response_data}")
+                 raise ValueError("ML API response format unexpected (not a dict).")
+            # --- END MODIFICATION ---
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"HTTP error calling ML API for document {document_id}: {e.response.status_code} - {e.response.text}", exc_info=False) # Log less verbosely for HTTP errors
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error communicating with AI detection service: {e.response.status_code}")
+    except ValueError as e: # Catch specific ValueErrors raised during parsing
+        logger.error(f"Error processing ML API response for document {document_id}: {e}", exc_info=True)
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI detection result: {e}")
+    except Exception as e: # Catch any other unexpected errors
+        logger.error(f"Unexpected error during ML API call or processing for document {document_id}: {e}", exc_info=True)
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get AI detection result: {e}")
+
+    # --- Update DB with Result (including new fields) ---
+    final_result: Optional[Result] = None
+    try:
+        if result: # Check if result object exists
+            # Prepare update data - only include fields that have a value
+            update_payload = {
+                "status": ResultStatus.COMPLETED,
+                "result_timestamp": datetime.now(timezone.utc) # Update timestamp
+            }
+            if ai_score is not None:
+                update_payload["score"] = ai_score
+            if ml_label is not None:
+                update_payload["label"] = ml_label
+            if ml_ai_generated is not None:
+                update_payload["ai_generated"] = ml_ai_generated
+            if ml_human_generated is not None:
+                update_payload["human_generated"] = ml_human_generated
+
+            # Use the ResultUpdate model to validate the payload before sending to CRUD
+            result_update_data = ResultUpdate(**update_payload)
+
+            # Call CRUD update function
+            final_result = await crud.update_result(result_id=result.id, result_in=result_update_data)
+
+            if final_result:
+                await crud.update_document_status(document_id=document_id, status=DocumentStatus.COMPLETED)
+                logger.info(f"Assessment completed for document {document_id}. Score: {ai_score}, Label: {ml_label}, AI: {ml_ai_generated}, Human: {ml_human_generated}")
+            else:
+                 logger.error(f"Failed to update result record {result.id} in database, record might be missing.")
+                 raise ValueError("Failed to update result record in database.")
+        else:
+             # Should not happen if initial check passed
+             logger.error(f"Result object became None unexpectedly for document {document_id}.")
+             raise ValueError("Result record unavailable for update.")
+
+    except Exception as e:
+        logger.error(f"Failed to update database after successful ML API call for document {document_id}: {e}", exc_info=True)
+        # Status might already be ERROR from previous steps, but ensure it is
+        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, result_in=ResultUpdate(status=ResultStatus.ERROR))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save assessment result.")
+
+    if not final_result:
+         # Fallback error if update somehow failed without exception
+         logger.error(f"Final result object is None after attempting DB update for doc {document_id}.")
+         raise HTTPException(status_code=500, detail="Failed to retrieve final result after update.")
+
+    return final_result # Return the complete, updated Result object
 
 
 @router.get(
     "/{document_id}",
-    # ... (read_document function code remains the same) ...
     response_model=Document,
     status_code=status.HTTP_200_OK,
     summary="Get a specific document's metadata by ID (Protected)",
@@ -206,11 +384,10 @@ async def read_document(
     logger.info(f"User {user_kinde_id} attempting to read document ID: {document_id}")
     document = await crud.get_document_by_id(document_id=document_id)
     if document is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document with ID {document_id} not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
     # TODO: Add fine-grained authorization check
     return document
 
-# --- MODIFIED ENDPOINT FOR TEXT EXTRACTION ---
 @router.get(
     "/{document_id}/text",
     response_class=PlainTextResponse,
@@ -244,10 +421,8 @@ async def get_document_text(
     # 2. TODO: Authorization Check
     logger.warning(f"Authorization check needed for user {user_kinde_id} accessing text of document {document_id}")
 
-    # --- MODIFICATION START ---
-    # Convert file_type string (from DB/model) back to Enum member if possible,
-    # needed for the check below and for passing to extract_text_from_bytes
-    file_type_str = document.file_type # Assuming document.file_type holds the string like "pdf"
+    # Convert file_type string (from DB/model) back to Enum member if possible
+    file_type_str = document.file_type
     file_type_enum_member: Optional[FileType] = None
     if isinstance(file_type_str, str):
         for member in FileType:
@@ -255,23 +430,20 @@ async def get_document_text(
                 file_type_enum_member = member
                 break
     elif isinstance(file_type_str, FileType): # If it somehow already is an Enum
-         file_type_enum_member = file_type_str
+        file_type_enum_member = file_type_str
 
     # 3. Check if file type is supported for text extraction (using the Enum member)
     if file_type_enum_member not in [FileType.PDF, FileType.DOCX, FileType.TXT, FileType.TEXT]:
-         # Log the string value for clarity
-         logger.warning(f"Text extraction requested for unsupported file type '{file_type_str}' for document {document_id}")
-         raise HTTPException(
-             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-             detail=f"Text extraction not supported for file type: {file_type_str}"
-         )
+        logger.warning(f"Text extraction requested for unsupported file type '{file_type_str}' for document {document_id}")
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Text extraction not supported for file type: {file_type_str}"
+        )
 
     # Ensure we have a valid enum member before proceeding
     if file_type_enum_member is None:
         logger.error(f"Could not map file_type string '{file_type_str}' back to FileType enum for doc {document_id}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error processing file type.")
-    # --- MODIFICATION END ---
-
 
     # 4. Download file bytes from blob storage
     blob_name = document.storage_blob_path
@@ -280,7 +452,7 @@ async def get_document_text(
         logger.debug(f"Attempting to download blob: {blob_name}")
         file_bytes = await download_blob_as_bytes(blob_name=blob_name)
         if file_bytes is None:
-             raise ValueError(f"Blob '{blob_name}' not found or download returned None.")
+            raise ValueError(f"Blob '{blob_name}' not found or download returned None.")
         logger.debug(f"Successfully downloaded {len(file_bytes)} bytes for blob: {blob_name}")
     except Exception as e:
         logger.error(f"Failed to download blob '{blob_name}' for document {document_id}: {e}", exc_info=True)
@@ -288,29 +460,23 @@ async def get_document_text(
 
     # 5. Extract text using the helper function
     if file_bytes is None: # Safety check
-         logger.error(f"File bytes are None after download for blob {blob_name}, cannot extract text.")
-         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal error retrieving file content.")
+        logger.error(f"File bytes are None after download for blob {blob_name}, cannot extract text.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal error retrieving file content.")
 
-    # --- MODIFIED: Pass the Enum member to the extraction function ---
     logger.debug(f"Attempting text extraction for document {document_id} (type: {file_type_str})") # Log string
     extracted_text = extract_text_from_bytes(file_bytes=file_bytes, file_type=file_type_enum_member) # Pass Enum
-    # --- END MODIFICATION ---
 
     # 6. Handle extraction result and return response
     if extracted_text is None:
-        # --- MODIFIED: Log the string file type ---
         logger.error(f"Text extraction function returned None for document {document_id} (type: {file_type_str})")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to extract text content from the document.")
     else:
         logger.info(f"Successfully extracted and returning text for document {document_id} ({len(extracted_text)} chars)")
+        # Return empty string if extraction yielded nothing, otherwise the text
         return str(extracted_text) if extracted_text is not None else ""
-
-# --- END MODIFIED TEXT ENDPOINT ---
-
 
 @router.get(
     "/",
-    # ... (read_documents function code remains the same - already fixed) ...
     response_model=List[Document],
     status_code=status.HTTP_200_OK,
     summary="Get a list of documents (Protected)",
@@ -327,19 +493,14 @@ async def read_documents(
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} attempting to read list of documents with filters.")
     # TODO: Add authorization logic (filter results based on user's access)
-    # ----- CORRECTED CALL: Removed db=None -----
     documents = await crud.get_all_documents(
         student_id=student_id, assignment_id=assignment_id, status=status, skip=skip, limit=limit
     )
-    # -----------------------------------------
-    # NOTE: Ensure get_all_documents internally handles Pydantic validation correctly
-    # if it returns raw DB data that needs conversion/validation.
     return documents
 
 @router.put(
     "/{document_id}/status",
-    # ... (update_document_processing_status function code remains the same) ...
-     response_model=Document,
+    response_model=Document,
     status_code=status.HTTP_200_OK,
     summary="Update a document's processing status (Protected)",
     description="Updates the processing status of a document. Requires authentication. (Typically for internal use)."
@@ -363,7 +524,6 @@ async def update_document_processing_status(
 
 @router.delete(
     "/{document_id}",
-    # ... (delete_document_metadata function code remains the same) ...
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a document record (Protected)",
     description="Deletes a document metadata record. Requires authentication. Does NOT delete the file from Blob Storage."
@@ -381,3 +541,4 @@ async def delete_document_metadata(
     if not deleted: raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document metadata {document_id} not found.")
     logger.info(f"Document metadata {document_id} deleted by user {user_kinde_id}.")
     return None # Return None for 204 response
+
