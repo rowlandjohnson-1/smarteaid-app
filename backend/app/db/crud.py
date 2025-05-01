@@ -18,18 +18,19 @@ import asyncio
 from .database import get_database
 
 # --- Pydantic Models ---
-from ..models.school import SchoolCreate, SchoolUpdate, School
+from app.models.school import SchoolCreate, SchoolUpdate, School
 # --- CORRECTED Teacher model imports ---
 # Import TeacherCreate as defined in your teacher.py
-from ..models.teacher import Teacher, TeacherCreate, TeacherUpdate, TeacherRole
+from app.models.teacher import Teacher, TeacherCreate, TeacherUpdate, TeacherRole
 # ------------------------------------
-from ..models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
-from ..models.student import Student, StudentCreate, StudentUpdate
-from ..models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
-from ..models.document import Document, DocumentCreate, DocumentUpdate
-from ..models.result import Result, ResultCreate, ResultUpdate, ResultStatus
+from app.models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
+from app.models.student import Student, StudentCreate, StudentUpdate
+from app.models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
+from app.models.document import Document, DocumentCreate, DocumentUpdate
+from app.models.result import Result, ResultCreate, ResultUpdate, ResultStatus
 # --- Import Enums used in Teacher model ---
-from ..models.enums import DocumentStatus, ResultStatus, FileType, MarketingSource
+from app.models.enums import DocumentStatus, ResultStatus, FileType, MarketingSource
+from app.models.batch import Batch, BatchCreate, BatchUpdate, BatchWithDocuments
 
 # --- Logging Setup ---
 logger = logging.getLogger(__name__)
@@ -1347,4 +1348,137 @@ async def get_teachers_by_school(
 
 # --- Final Placeholder ---
 # (All core entities now have basic CRUD with consistent pattern, applied explicit _id->id mapping for list returns)
+
+# === Batch Operations ===
+
+async def create_batch(*, batch_in: BatchCreate) -> Optional[Batch]:
+    """Create a new batch record."""
+    collection = _get_collection("batches")
+    if collection is None:
+        logger.error("Failed to get batches collection")
+        return None
+
+    try:
+        batch_dict = batch_in.dict()
+        batch_dict["_id"] = uuid.uuid4()  # Generate new UUID for the batch
+        batch_dict["created_at"] = datetime.now(timezone.utc)
+        batch_dict["updated_at"] = batch_dict["created_at"]
+        
+        result = await collection.insert_one(batch_dict)
+        if result.inserted_id:
+            return await get_batch_by_id(batch_id=batch_dict["_id"])
+        return None
+    except Exception as e:
+        logger.error(f"Error creating batch: {e}")
+        return None
+
+async def get_batch_by_id(*, batch_id: uuid.UUID) -> Optional[Batch]:
+    """Get a batch by its ID."""
+    collection = _get_collection("batches")
+    if collection is None:
+        logger.error("Failed to get batches collection")
+        return None
+
+    try:
+        batch_dict = await collection.find_one({"_id": batch_id})
+        if batch_dict:
+            return Batch(**batch_dict)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting batch {batch_id}: {e}")
+        return None
+
+async def update_batch(*, batch_id: uuid.UUID, batch_in: BatchUpdate) -> Optional[Batch]:
+    """Update a batch record."""
+    collection = _get_collection("batches")
+    if collection is None:
+        logger.error("Failed to get batches collection")
+        return None
+
+    try:
+        update_data = batch_in.dict(exclude_unset=True)
+        if not update_data:
+            return await get_batch_by_id(batch_id=batch_id)
+        
+        update_data["updated_at"] = datetime.now(timezone.utc)
+        
+        result = await collection.update_one(
+            {"_id": batch_id},
+            {"$set": update_data}
+        )
+        
+        if result.modified_count:
+            return await get_batch_by_id(batch_id=batch_id)
+        return None
+    except Exception as e:
+        logger.error(f"Error updating batch {batch_id}: {e}")
+        return None
+
+async def get_documents_by_batch_id(*, batch_id: uuid.UUID) -> List[Document]:
+    """Get all documents in a batch."""
+    collection = _get_collection(DOCUMENT_COLLECTION)
+    if collection is None:
+        logger.error("Failed to get documents collection")
+        return []
+
+    try:
+        cursor = collection.find({"batch_id": batch_id})
+        documents = []
+        async for doc in cursor:
+            documents.append(Document(**doc))
+        return documents
+    except Exception as e:
+        logger.error(f"Error getting documents for batch {batch_id}: {e}")
+        return []
+
+async def get_batch_status_summary(*, batch_id: uuid.UUID) -> dict:
+    """Get a summary of document statuses in a batch."""
+    collection = _get_collection(DOCUMENT_COLLECTION)
+    if collection is None:
+        logger.error("Failed to get documents collection")
+        return {}
+
+    try:
+        pipeline = [
+            {"$match": {"batch_id": batch_id}},
+            {
+                "$group": {
+                    "_id": "$status",
+                    "count": {"$sum": 1}
+                }
+            }
+        ]
+        
+        cursor = collection.aggregate(pipeline)
+        status_counts = {}
+        async for result in cursor:
+            status_counts[result["_id"]] = result["count"]
+        
+        return status_counts
+    except Exception as e:
+        logger.error(f"Error getting status summary for batch {batch_id}: {e}")
+        return {}
+
+async def delete_batch(*, batch_id: uuid.UUID) -> bool:
+    """Delete a batch and optionally its documents (metadata only)."""
+    batch_collection = _get_collection("batches")
+    doc_collection = _get_collection(DOCUMENT_COLLECTION)
+    if batch_collection is None or doc_collection is None:
+        logger.error("Failed to get required collections")
+        return False
+
+    try:
+        # Delete the batch record
+        result = await batch_collection.delete_one({"_id": batch_id})
+        if result.deleted_count:
+            # Update documents to remove batch_id reference
+            await doc_collection.update_many(
+                {"batch_id": batch_id},
+                {"$unset": {"batch_id": "", "queue_position": ""}}
+            )
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error deleting batch {batch_id}: {e}")
+        return False
  

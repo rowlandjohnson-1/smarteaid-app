@@ -5,7 +5,8 @@ import time   # For uptime calculation
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
-from datetime import datetime, timedelta # For uptime calculation
+from datetime import datetime, timedelta, timezone # For uptime calculation
+import asyncio
 
 # Import config and database lifecycle functions
 # Adjust path '.' based on where main.py is relative to 'core' and 'db'
@@ -25,6 +26,9 @@ from app.api.v1.endpoints import (
     results,    # Includes results router import
     dashboard   # NEW: Import dashboard router
 )
+
+# Import batch processor
+from app.tasks import batch_processor
 
 # Setup logging
 logger = logging.getLogger(__name__) # Use main module logger or project-specific
@@ -63,10 +67,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Event Handlers for DB Connection ---
+# --- Event Handlers for DB Connection and Batch Processor ---
 @app.on_event("startup")
-async def startup_db_client():
-    """Connect to MongoDB on application startup."""
+async def startup_event():
+    """Connect to MongoDB and start batch processor on application startup."""
     logger.info("Executing startup event: Connecting to database...")
     connected = await connect_to_mongo()
     if not connected:
@@ -74,10 +78,21 @@ async def startup_db_client():
     else:
         logger.info("Startup event: Database connection successful.")
 
+    # Start batch processor in background task
+    asyncio.create_task(batch_processor.process_batches())
+    logger.info("Batch processor started")
+
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    """Disconnect from MongoDB on application shutdown."""
-    logger.info("Executing shutdown event: Disconnecting from database...")
+async def shutdown_event():
+    """Stop batch processor and disconnect from MongoDB on application shutdown."""
+    logger.info("Executing shutdown event...")
+    
+    # Stop batch processor
+    batch_processor.stop()
+    logger.info("Batch processor stopped")
+    
+    # Disconnect from database
+    logger.info("Disconnecting from database...")
     await close_mongo_connection()
 
 # --- API Endpoints ---

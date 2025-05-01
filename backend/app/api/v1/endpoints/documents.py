@@ -20,7 +20,9 @@ from ....models.document import Document, DocumentCreate, DocumentUpdate
 from ....models.result import Result, ResultCreate, ResultUpdate, ParagraphResult
 # --- End Import ---
 # Ensure FileType is imported along with other enums
-from ....models.enums import DocumentStatus, ResultStatus, FileType
+from ....models.enums import DocumentStatus, ResultStatus, FileType, BatchPriority, BatchStatus
+# Import Batch models
+from ....models.batch import Batch, BatchCreate, BatchUpdate, BatchWithDocuments
 
 # Import CRUD functions
 from ....db import crud # Assuming crud functions are in app/db/crud.py
@@ -559,4 +561,193 @@ async def delete_document_metadata(
     if not deleted: raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document metadata {document_id} not found.")
     logger.info(f"Document metadata {document_id} deleted by user {user_kinde_id}.")
     return None # Return None for 204 response
+
+@router.post(
+    "/batch",
+    response_model=BatchWithDocuments,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload multiple documents in a batch (Protected)",
+    description="Uploads multiple files, creates a batch record, and queues them for processing. Requires authentication."
+)
+async def upload_batch(
+    student_id: uuid.UUID = Form(..., description="Internal ID of the student associated with the documents"),
+    assignment_id: uuid.UUID = Form(..., description="ID of the assignment associated with the documents"),
+    files: List[UploadFile] = File(..., description="The document files to upload (PDF, DOCX, TXT, PNG, JPG)"),
+    priority: BatchPriority = Form(BatchPriority.NORMAL, description="Processing priority for the batch"),
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    """
+    Protected endpoint to upload multiple documents in a batch, store them,
+    create metadata, and initiate the analysis process.
+    """
+    user_kinde_id = current_user_payload.get("sub")
+    logger.info(f"User {user_kinde_id} attempting to upload batch of {len(files)} documents")
+
+    # Create batch record
+    batch_data = BatchCreate(
+        user_id=user_kinde_id,
+        total_files=len(files),
+        status=BatchStatus.UPLOADING,
+        priority=priority
+    )
+    batch = await crud.create_batch(batch_in=batch_data)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create batch record"
+        )
+
+    documents = []
+    failed_files = []
+
+    # Process each file
+    for file in files:
+        try:
+            original_filename = file.filename or "unknown_file"
+            
+            # File type validation
+            content_type = file.content_type
+            file_extension = os.path.splitext(original_filename)[1].lower()
+            file_type_enum = None
+            
+            if file_extension == ".pdf" and content_type == "application/pdf": 
+                file_type_enum = FileType.PDF
+            elif file_extension == ".docx" and content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document": 
+                file_type_enum = FileType.DOCX
+            elif file_extension == ".txt" and content_type == "text/plain": 
+                file_type_enum = FileType.TXT
+            elif file_extension == ".png" and content_type == "image/png": 
+                file_type_enum = FileType.PNG
+            elif file_extension in [".jpg", ".jpeg"] and content_type == "image/jpeg": 
+                file_type_enum = FileType.JPG
+
+            if file_type_enum is None:
+                failed_files.append({
+                    "filename": original_filename,
+                    "error": f"Unsupported file type: {content_type}"
+                })
+                continue
+
+            # Upload to blob storage
+            blob_name = await upload_file_to_blob(upload_file=file)
+            if not blob_name:
+                failed_files.append({
+                    "filename": original_filename,
+                    "error": "Failed to upload to storage"
+                })
+                continue
+
+            # Create document record
+            now = datetime.now(timezone.utc)
+            # Convert priority enum to integer
+            priority_value = 0  # Default
+            if priority == BatchPriority.LOW:
+                priority_value = 0
+            elif priority == BatchPriority.NORMAL:
+                priority_value = 1
+            elif priority == BatchPriority.HIGH:
+                priority_value = 2
+            elif priority == BatchPriority.URGENT:
+                priority_value = 3
+
+            document_data = DocumentCreate(
+                original_filename=original_filename,
+                storage_blob_path=blob_name,
+                file_type=file_type_enum,
+                upload_timestamp=now,
+                student_id=student_id,
+                assignment_id=assignment_id,
+                status=DocumentStatus.UPLOADED,
+                batch_id=batch.id,
+                queue_position=len(documents) + 1,
+                processing_priority=priority_value  # Use the converted integer value
+            )
+            
+            document = await crud.create_document(document_in=document_data)
+            if not document:
+                failed_files.append({
+                    "filename": original_filename,
+                    "error": "Failed to create document record"
+                })
+                continue
+
+            # Create initial result record
+            result_data = ResultCreate(
+                score=None,
+                status=ResultStatus.PENDING,
+                result_timestamp=now,
+                document_id=document.id
+            )
+            await crud.create_result(result_in=result_data)
+            
+            documents.append(document)
+
+        except Exception as e:
+            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            failed_files.append({
+                "filename": file.filename,
+                "error": str(e)
+            })
+
+    # Update batch status
+    batch_update = BatchUpdate(
+        completed_files=0,
+        failed_files=len(failed_files),
+        status=BatchStatus.QUEUED if documents else BatchStatus.ERROR,
+        error_message=f"Failed to process {len(failed_files)} files" if failed_files else None
+    )
+    updated_batch = await crud.update_batch(batch_id=batch.id, batch_in=batch_update)
+
+    if not documents:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Failed to process any files in the batch",
+                "failed_files": failed_files
+            }
+        )
+
+    return BatchWithDocuments(
+        **updated_batch.dict(),
+        document_ids=[doc.id for doc in documents]
+    )
+
+@router.get(
+    "/batch/{batch_id}",
+    response_model=BatchWithDocuments,
+    status_code=status.HTTP_200_OK,
+    summary="Get batch upload status (Protected)",
+    description="Get the status of a batch upload including all documents in the batch. Requires authentication."
+)
+async def get_batch_status(
+    batch_id: uuid.UUID,
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    """
+    Protected endpoint to get the status of a batch upload and its documents.
+    """
+    user_kinde_id = current_user_payload.get("sub")
+    
+    # Get batch
+    batch = await crud.get_batch_by_id(batch_id=batch_id)
+    if not batch:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Batch with ID {batch_id} not found"
+        )
+
+    # Authorization check
+    if batch.user_id != user_kinde_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view this batch"
+        )
+
+    # Get all documents in batch
+    documents = await crud.get_documents_by_batch_id(batch_id=batch_id)
+    
+    return BatchWithDocuments(
+        **batch.dict(),
+        document_ids=[doc.id for doc in documents]
+    )
 

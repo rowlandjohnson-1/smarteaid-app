@@ -17,6 +17,13 @@ class DocumentBase(BaseModel):
     status: DocumentStatus = Field(default=DocumentStatus.UPLOADED, description="Processing status of the document")
     student_id: uuid.UUID = Field(..., description="ID of the student associated with this document")
     assignment_id: uuid.UUID = Field(..., description="ID of the assignment associated with this document")
+    
+    # Batch processing fields
+    batch_id: Optional[uuid.UUID] = Field(default=None, description="ID of the batch this document belongs to")
+    queue_position: Optional[int] = Field(default=None, description="Position in the processing queue")
+    processing_priority: Optional[int] = Field(default=0, description="Processing priority (higher = more priority)")
+    processing_attempts: Optional[int] = Field(default=0, description="Number of processing attempts")
+    error_message: Optional[str] = Field(default=None, description="Error message if processing failed")
 
     # Ensure status is stored/retrieved as its value if needed, handled by Config below
     # @field_validator('status', mode='before')
@@ -35,8 +42,10 @@ class DocumentCreate(DocumentBase):
 # Typically only status might be updated via API, or maybe other fields later
 class DocumentUpdate(BaseModel):
     status: Optional[DocumentStatus] = Field(None, description="New processing status")
-    # Add other updatable fields here if needed, e.g.:
-    # original_filename: Optional[str] = None
+    queue_position: Optional[int] = None
+    processing_priority: Optional[int] = None
+    processing_attempts: Optional[int] = None
+    error_message: Optional[str] = None
 
 # --- Model for Database (includes internal fields) ---
 class DocumentInDBBase(DocumentBase):
@@ -56,4 +65,12 @@ class DocumentInDBBase(DocumentBase):
 class Document(DocumentInDBBase):
     # This model represents the data returned by the API
     pass
+
+# --- Model for Batch Response ---
+class DocumentBatchResponse(BaseModel):
+    id: uuid.UUID
+    original_filename: str
+    status: DocumentStatus
+    queue_position: Optional[int]
+    error_message: Optional[str]
 

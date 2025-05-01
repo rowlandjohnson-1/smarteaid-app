@@ -49,3 +49,21 @@ class ResultStatus(str, Enum):
     ASSESSING = "ASSESSING"   # Analysis in progress (Changed to uppercase)
     COMPLETED = "COMPLETED"   # Analysis complete, score available (Changed to uppercase)
     ERROR = "ERROR"           # Error during analysis, score may be unavailable (Changed to uppercase)
+
+class BatchStatus(str, Enum):
+    """Enumeration for the status of a document batch upload."""
+    CREATED = "CREATED"       # Batch created, files not yet uploaded
+    QUEUED = "QUEUED"         # Batch queued for processing
+    UPLOADING = "UPLOADING"   # Files are being uploaded
+    VALIDATING = "VALIDATING" # Validating uploaded files
+    PROCESSING = "PROCESSING" # Processing individual documents
+    COMPLETED = "COMPLETED"   # All documents in batch processed
+    PARTIAL = "PARTIAL"       # Some documents processed, some failed
+    ERROR = "ERROR"           # Batch processing failed
+
+class BatchPriority(str, Enum):
+    """Enumeration for batch processing priority."""
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
