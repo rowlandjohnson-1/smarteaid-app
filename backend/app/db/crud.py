@@ -4,6 +4,7 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from pymongo.collation import Collation, CollationStrength # Add for case-insensitive aggregation if needed
 import uuid
 from typing import List, Optional, Dict, Any, TypeVar, Type, Tuple
 from datetime import datetime, timezone, timedelta
@@ -26,7 +27,7 @@ from ..models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
 from ..models.student import Student, StudentCreate, StudentUpdate
 from ..models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
 from ..models.document import Document, DocumentCreate, DocumentUpdate
-from ..models.result import Result, ResultCreate, ResultUpdate
+from ..models.result import Result, ResultCreate, ResultUpdate, ResultStatus
 # --- Import Enums used in Teacher model ---
 from ..models.enums import DocumentStatus, ResultStatus, FileType, MarketingSource
 
@@ -608,7 +609,7 @@ async def get_all_students( external_student_id: Optional[str] = None, first_nam
         cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
         async for doc in cursor:
             try:
-                mapped_data = {**doc} # Create a mutable copy
+                mapped_data = {**doc}
                 if "_id" in mapped_data:
                     mapped_data["id"] = mapped_data.pop("_id") # Rename key
                 else:
@@ -768,16 +769,42 @@ async def get_document_by_id(document_id: uuid.UUID, include_deleted: bool = Fal
     if doc: return Document(**doc) # Assumes schema handles alias
     else: logger.warning(f"Document {document_id} not found."); return None
 
-async def get_all_documents( student_id: Optional[uuid.UUID] = None, assignment_id: Optional[uuid.UUID] = None, status: Optional[DocumentStatus] = None, skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Document]:
-    collection = _get_collection(DOCUMENT_COLLECTION); documents_list: List[Document] = []
+async def get_all_documents(
+    student_id: Optional[uuid.UUID] = None,
+    assignment_id: Optional[uuid.UUID] = None,
+    status: Optional[DocumentStatus] = None,
+    skip: int = 0,
+    limit: int = 100,
+    include_deleted: bool = False,
+    sort_by: Optional[str] = None, # NEW: Field to sort by (e.g., "upload_timestamp")
+    sort_order: int = -1,        # NEW: 1 for asc, -1 for desc (default desc)
+    session=None
+) -> List[Document]:
+    collection = _get_collection(DOCUMENT_COLLECTION)
+    documents_list: List[Document] = []
     if collection is None: return documents_list
+
     filter_query = soft_delete_filter(include_deleted)
     if student_id: filter_query["student_id"] = student_id
     if assignment_id: filter_query["assignment_id"] = assignment_id
     if status: filter_query["status"] = status.value # Filter DB by enum value
-    logger.info(f"Getting all documents filter={filter_query} skip={skip} limit={limit}")
+
+    logger.info(f"Getting all documents filter={filter_query} sort_by={sort_by} sort_order={sort_order} skip={skip} limit={limit}")
+
     try:
-        cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
+        cursor = collection.find(filter_query, session=session)
+
+        # --- NEW: Apply Sorting ---
+        if sort_by:
+            # Map 'id' to '_id' for sorting if necessary
+            db_sort_field = "_id" if sort_by == "id" else sort_by
+            sort_criteria = [(db_sort_field, sort_order)]
+            logger.debug(f"Applying sort criteria: {sort_criteria}")
+            cursor = cursor.sort(sort_criteria)
+        # --- END NEW Sorting ---
+
+        cursor = cursor.skip(skip).limit(limit) # Apply skip/limit after sorting
+
         async for doc in cursor:
             try:
                 mapped_data = {**doc}
@@ -960,6 +987,219 @@ async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: boo
         logger.error(f"Error getting result by doc id {document_id}: {e}", exc_info=True);
         return None
 # --- End optional logging ---
+
+# --- NEW Dashboard CRUD Functions ---
+
+async def get_dashboard_stats(
+    # Add parameters if stats need filtering, e.g., teacher_id, school_id
+    session=None
+) -> Dict[str, Any]:
+    """Calculates various statistics for the dashboard."""
+    doc_collection = _get_collection(DOCUMENT_COLLECTION)
+    result_collection = _get_collection(RESULT_COLLECTION)
+    stats = {
+        "totalAssessed": 0,
+        "avgScore": None,
+        "flaggedRecent": 0,
+        "pending": 0
+    }
+    if doc_collection is None or result_collection is None:
+        logger.error("Cannot get dashboard stats: Collection(s) not available.")
+        return stats # Return default empty stats
+
+    logger.info("Calculating dashboard stats...")
+    try:
+        # 1. Total Assessed (Count completed documents/results)
+        total_assessed_filter = {
+            "status": ResultStatus.COMPLETED.value,
+            "deleted_at": None
+        }
+        stats["totalAssessed"] = await result_collection.count_documents(total_assessed_filter, session=session)
+
+        # 2. Average Score (Aggregation on completed results)
+        avg_score_pipeline = [
+            {
+                "$match": {
+                    "status": ResultStatus.COMPLETED.value,
+                    "score": {"$ne": None},
+                    "deleted_at": None
+                }
+            },
+            {"$group": {"_id": None, "averageScore": {"$avg": "$score"}}}
+        ]
+        avg_cursor = result_collection.aggregate(avg_score_pipeline, session=session)
+        avg_result = await avg_cursor.to_list(length=1)
+        if avg_result and "averageScore" in avg_result[0]:
+            stats["avgScore"] = avg_result[0]["averageScore"]
+
+        # 3. Flagged Recently (Count results flagged as AI in last 7 days)
+        time_threshold = datetime.now(timezone.utc) - timedelta(days=7)
+        flagged_filter = {
+            "ai_generated": True,
+            "result_timestamp": {"$gte": time_threshold},
+            "deleted_at": None
+        }
+        stats["flaggedRecent"] = await result_collection.count_documents(flagged_filter, session=session)
+
+        # 4. Pending/Processing (Count documents in relevant states)
+        pending_filter = {
+            "status": {"$in": [DocumentStatus.PROCESSING.value, DocumentStatus.QUEUED.value]},
+            "deleted_at": None
+        }
+        stats["pending"] = await doc_collection.count_documents(pending_filter, session=session)
+
+        logger.info(f"Dashboard stats calculated: {stats}")
+        return stats
+
+    except Exception as e:
+        logger.error(f"Error calculating dashboard stats: {e}", exc_info=True)
+        return stats # Return default/partially calculated stats on error
+
+
+async def get_score_distribution(
+    # Add parameters if distribution needs filtering, e.g., teacher_id, date range
+    session=None
+) -> Dict[str, Any]:
+    """
+    Calculate the distribution of AI scores across predefined ranges.
+    Returns a dictionary containing the distribution and total count.
+    """
+    collection = _get_collection(RESULT_COLLECTION)  # Changed to RESULT_COLLECTION
+    if collection is None:
+        logger.error("Failed to get results collection for score distribution")
+        return {"distribution": [], "total_documents": 0}
+
+    try:
+        # Define the aggregation pipeline
+        pipeline = [
+            # First match only completed results with scores
+            {
+                "$match": {
+                    "status": ResultStatus.COMPLETED.value,
+                    "score": {"$exists": True, "$ne": None},
+                    "deleted_at": None
+                }
+            },
+            
+            # Add normalized score field
+            {
+                "$addFields": {
+                    "normalized_score": {
+                        "$cond": {
+                            "if": {"$lt": ["$score", 1]},
+                            "then": {"$multiply": ["$score", 100]},
+                            "else": "$score"
+                        }
+                    }
+                }
+            },
+            
+            # Add score range field using the normalized score
+            {
+                "$addFields": {
+                    "score_range": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$normalized_score", 0]},
+                                            {"$lte": ["$normalized_score", 20]}
+                                        ]
+                                    },
+                                    "then": "0-20"
+                                },
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$normalized_score", 21]},
+                                            {"$lte": ["$normalized_score", 40]}
+                                        ]
+                                    },
+                                    "then": "21-40"
+                                },
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$normalized_score", 41]},
+                                            {"$lte": ["$normalized_score", 60]}
+                                        ]
+                                    },
+                                    "then": "41-60"
+                                },
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$normalized_score", 61]},
+                                            {"$lte": ["$normalized_score", 80]}
+                                        ]
+                                    },
+                                    "then": "61-80"
+                                },
+                                {
+                                    "case": {
+                                        "$and": [
+                                            {"$gte": ["$normalized_score", 81]},
+                                            {"$lte": ["$normalized_score", 100]}
+                                        ]
+                                    },
+                                    "then": "81-100"
+                                }
+                            ],
+                            "default": "0-20"
+                        }
+                    }
+                }
+            },
+            
+            # Group by score range and count documents
+            {
+                "$group": {
+                    "_id": "$score_range",
+                    "count": {"$sum": 1}
+                }
+            },
+            
+            # Project to match expected format
+            {
+                "$project": {
+                    "_id": 0,
+                    "range": "$_id",
+                    "count": 1
+                }
+            },
+            
+            # Sort by range
+            {
+                "$sort": {
+                    "range": 1
+                }
+            }
+        ]
+
+        # Execute the pipeline
+        results = []
+        async for doc in collection.aggregate(pipeline, session=session):
+            results.append(doc)
+
+        # Ensure all ranges are present with at least 0 count
+        ranges = ["0-20", "21-40", "41-60", "61-80", "81-100"]
+        distribution = {item["range"]: item["count"] for item in results}
+        final_distribution = [{"range": r, "count": distribution.get(r, 0)} for r in ranges]
+
+        # Calculate total documents
+        total_documents = sum(item["count"] for item in final_distribution)
+
+        return {
+            "distribution": final_distribution,
+            "total_documents": total_documents
+        }
+
+    except Exception as e:
+        logger.error(f"Error calculating score distribution: {e}", exc_info=True)
+        return {"distribution": [], "total_documents": 0}
+
+# --- END NEW Dashboard CRUD Functions ---
 
 # --- Bulk Operations (Keep existing) ---
 @with_transaction

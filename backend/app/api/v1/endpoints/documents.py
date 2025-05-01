@@ -484,21 +484,35 @@ async def get_document_text(
     response_model=List[Document],
     status_code=status.HTTP_200_OK,
     summary="Get a list of documents (Protected)",
-    description="Retrieves a list of document metadata records, with optional filtering and pagination. Requires authentication."
+    description="Retrieves a list of document metadata records, with optional filtering, sorting, and pagination. Requires authentication."
 )
 async def read_documents(
     student_id: Optional[uuid.UUID] = Query(None, description="Filter by student UUID"),
     assignment_id: Optional[uuid.UUID] = Query(None, description="Filter by assignment UUID"),
     status: Optional[DocumentStatus] = Query(None, description="Filter by document processing status"),
-    skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500),
+    skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
+    limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
+    sort_by: Optional[str] = Query(None, description="Field to sort by (e.g., 'upload_timestamp', 'original_filename')"),
+    sort_order: int = Query(-1, description="Sort order: 1 for ascending, -1 for descending"),
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """Protected endpoint to retrieve a list of document metadata."""
     user_kinde_id = current_user_payload.get("sub")
-    logger.info(f"User {user_kinde_id} attempting to read list of documents with filters.")
+    logger.info(f"User {user_kinde_id} attempting to read list of documents with filters/sorting.")
     # TODO: Add authorization logic (filter results based on user's access)
+
+    # Validate sort_order if provided explicitly
+    if sort_order not in [1, -1]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sort_order value. Use 1 for ascending or -1 for descending.")
+
     documents = await crud.get_all_documents(
-        student_id=student_id, assignment_id=assignment_id, status=status, skip=skip, limit=limit
+        student_id=student_id,
+        assignment_id=assignment_id,
+        status=status,
+        skip=skip,
+        limit=limit,
+        sort_by=sort_by,
+        sort_order=sort_order
     )
     return documents
 

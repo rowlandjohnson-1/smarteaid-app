@@ -3,6 +3,7 @@ import logging
 import psutil # For system metrics in health check
 import time   # For uptime calculation
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 from datetime import datetime, timedelta # For uptime calculation
 
@@ -21,7 +22,8 @@ from app.api.v1.endpoints import (
     students,
     assignments,
     documents,  # Includes documents router import
-    results     # Includes results router import
+    results,    # Includes results router import
+    dashboard   # NEW: Import dashboard router
 )
 
 # Setup logging
@@ -31,6 +33,14 @@ logger = logging.getLogger(__name__) # Use main module logger or project-specifi
 
 # Track application start time for uptime calculation
 APP_START_TIME = time.time()
+
+# Define allowed origins
+origins = [
+    "http://localhost:5173",  # Vite frontend
+    "http://localhost:3000",  # Alternative frontend port
+    "http://127.0.0.1:5173",  # Alternative localhost
+    "http://127.0.0.1:3000",  # Alternative localhost
+]
 
 # Create FastAPI app instance with detailed configuration
 app = FastAPI(
@@ -42,6 +52,15 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json"
     # Using on_event decorators below for DB lifecycle
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Event Handlers for DB Connection ---
@@ -120,6 +139,7 @@ app.include_router(students.router, prefix=API_V1_PREFIX)
 app.include_router(assignments.router, prefix=API_V1_PREFIX)
 app.include_router(documents.router, prefix=API_V1_PREFIX) # Includes documents router
 app.include_router(results.router, prefix=API_V1_PREFIX)   # Includes results router
+app.include_router(dashboard.router, prefix=API_V1_PREFIX) # NEW: Include dashboard router
 
 # --- TODOs & Future Enhancements ---
 # TODO: Add middleware, CORS configuration, and global exception handlers
