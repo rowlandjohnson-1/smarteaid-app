@@ -38,6 +38,12 @@ class ResultBase(BaseModel):
     paragraph_results: Optional[List[ParagraphResult]] = Field(default=None, description="Detailed analysis results per paragraph")
     # --- END NEW FIELD ---
 
+    # Pydantic V2 model config (can be defined here or in inheriting classes)
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        use_enum_values = True # Ensure enums are handled correctly
+    )
 
 # Properties required on creation (usually set internally when upload happens)
 class ResultCreate(ResultBase):
@@ -49,6 +55,7 @@ class ResultCreate(ResultBase):
     human_generated: Optional[bool] = None
     paragraph_results: Optional[List[ParagraphResult]] = None
     status: ResultStatus = ResultStatus.PENDING # Ensure status is PENDING on create
+    # teacher_id and is_deleted are set by the backend
 
 # Properties stored in DB (includes system fields)
 class ResultInDBBase(ResultBase):
@@ -58,20 +65,27 @@ class ResultInDBBase(ResultBase):
     result_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the result was generated or last updated")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the result record was created")
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the result record was last updated")
-    deleted_at: Optional[datetime] = Field(default=None) # For soft delete
+
+    # --- RBAC Changes Below ---
+    # Add teacher_id, likely derived from the associated document upon creation
+    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns the associated document") # ADDED
+    # Replace deleted_at with is_deleted for consistency
+    # deleted_at: Optional[datetime] = Field(default=None) # REMOVED
+    is_deleted: bool = Field(default=False, description="Flag for soft delete status (likely linked to document deletion)") # ADDED
+    # --- RBAC Changes Above ---
 
     # Pydantic V2 Config
     model_config = ConfigDict(
-        populate_by_name=True,          # Allow using '_id' alias
-        from_attributes=True,           # Allow creating from DB object attributes
-        arbitrary_types_allowed=True,   # Allow UUID etc.
-        use_enum_values=True            # Store/retrieve enums by their value
+        populate_by_name=True,           # Allow using '_id' alias
+        from_attributes=True,            # Allow creating from DB object attributes
+        arbitrary_types_allowed=True,    # Allow UUID etc.
+        use_enum_values=True             # Store/retrieve enums by their value
     )
 
 # Final model representing a Result read from DB (API Response)
 class Result(ResultInDBBase):
     """Complete Result model representing data retrieved from the database."""
-    # Inherits all fields from ResultInDBBase
+    # Inherits all fields from ResultInDBBase including RBAC changes
     pass
 
 # Model for updating (when ML analysis completes)
@@ -88,6 +102,7 @@ class ResultUpdate(BaseModel):
     # --- END NEW FIELD ---
     # Update result_timestamp automatically when updating the result
     result_timestamp: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # teacher_id and is_deleted are not updatable via this model
 
     # Pydantic V2 Config
     model_config = ConfigDict(
