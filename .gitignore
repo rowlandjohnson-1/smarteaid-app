@@ -19,3 +19,5 @@ env/
 # Add other specific files/folders to ignore later if needed
 # e.g., build/
 # e.g., node_modules/"scripts/" 
+scripts/ 
+backend/scripts/ 
