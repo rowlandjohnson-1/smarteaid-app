@@ -329,13 +329,22 @@ async def add_student_to_group(
     await _check_user_is_teacher_of_group(existing_class_group, current_user_payload, action="add student to")
     # --- End Authorization Check ---
 
-    # Optional: Check if student exists before trying to add
-    student_exists = await crud.get_student_by_id(student_internal_id=student_id)
-    if not student_exists:
-        logger.warning(f"Attempt to add non-existent student {student_id} to class {class_group_id}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Student with ID {student_id} not found.")
+    # --- Validate Student Exists (and belongs to the same teacher) ---
+    # Use the teacher_id from the class group, which we know matches the authenticated user
+    student = await crud.get_student_by_id(
+        student_internal_id=student_id,
+        teacher_id=user_kinde_id_str # <<< Use Kinde ID for student check
+    )
+    if student is None:
+        # Student doesn't exist OR doesn't belong to this teacher
+        logger.warning(f"Attempt to add non-existent or unauthorized student {student_id} to class group {class_group_id} by user {user_kinde_id_str}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student with ID {student_id} not found or you do not have access."
+        )
+    # --- End Student Validation ---
 
-    # Call the CRUD function to add the student ID
+    # Attempt to add the student ID to the class group's student_ids list
     success = await crud.add_student_to_class_group(class_group_id=class_group_id, student_id=student_id)
 
     if not success:
