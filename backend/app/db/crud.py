@@ -637,11 +637,17 @@ async def create_student(student_in: StudentCreate, teacher_id: str, session=Non
     except Exception as e:
         logger.error(f"Error inserting student: {e}", exc_info=True); return None
 
-async def get_student_by_id(student_internal_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Student]:
+async def get_student_by_id(
+    student_internal_id: uuid.UUID,
+    teacher_id: str, # <<< ADDED: Make teacher_id mandatory
+    include_deleted: bool = False,
+    session=None
+) -> Optional[Student]:
     collection = _get_collection(STUDENT_COLLECTION);
     if collection is None: return None
-    logger.info(f"Getting student: {student_internal_id}")
-    query = {"_id": student_internal_id}; query.update(soft_delete_filter(include_deleted)) # Query by _id
+    logger.info(f"Getting student: {student_internal_id} for teacher: {teacher_id}") # Update log
+    query = {"_id": student_internal_id, "teacher_id": teacher_id}; # <<< MODIFIED: Add teacher_id check
+    query.update(soft_delete_filter(include_deleted)) # Query by _id
     try:
         student_doc = await collection.find_one(query, session=session)
         if student_doc:
@@ -649,14 +655,25 @@ async def get_student_by_id(student_internal_id: uuid.UUID, include_deleted: boo
             if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
             return Student(**mapped_data)
         else:
-            logger.warning(f"Student {student_internal_id} not found."); return None
+            logger.warning(f"Student {student_internal_id} not found for teacher {teacher_id}."); return None # Modified log
     except Exception as e:
         logger.error(f"Error getting student: {e}", exc_info=True); return None
 
-async def get_all_students( external_student_id: Optional[str] = None, first_name: Optional[str] = None, last_name: Optional[str] = None, year_group: Optional[str] = None, skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Student]:
+async def get_all_students(
+    teacher_id: str, # <<< ADDED: Make teacher_id mandatory
+    external_student_id: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    year_group: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    include_deleted: bool = False,
+    session=None
+) -> List[Student]:
     collection = _get_collection(STUDENT_COLLECTION); students_list: List[Student] = []
     if collection is None: return students_list
     filter_query = soft_delete_filter(include_deleted)
+    filter_query["teacher_id"] = teacher_id # <<< ADDED: Filter by teacher_id
     if external_student_id is not None: filter_query["external_student_id"] = external_student_id
     if first_name is not None: filter_query["first_name"] = {"$regex": f"^{re.escape(first_name)}$", "$options": "i"}
     if last_name is not None: filter_query["last_name"] = {"$regex": f"^{re.escape(last_name)}$", "$options": "i"}
@@ -820,17 +837,24 @@ async def create_document(document_in: DocumentCreate, session=None) -> Optional
         else: logger.error(f"Failed retrieve document post-insert: {document_id}"); return None
     except Exception as e: logger.error(f"Error during document insertion: {e}", exc_info=True); return None
 
-async def get_document_by_id(document_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Document]:
+async def get_document_by_id(
+    document_id: uuid.UUID,
+    teacher_id: str, # <<< ADDED: Make teacher_id mandatory
+    include_deleted: bool = False,
+    session=None
+) -> Optional[Document]:
     collection = _get_collection(DOCUMENT_COLLECTION)
     if collection is None: return None
-    logger.info(f"Getting document: {document_id}")
-    query = {"_id": document_id}; query.update(soft_delete_filter(include_deleted)) # Query by _id
+    logger.info(f"Getting document: {document_id} for teacher: {teacher_id}") # Update log
+    query = {"_id": document_id, "teacher_id": teacher_id}; # <<< MODIFIED: Add teacher_id to query
+    query.update(soft_delete_filter(include_deleted)) # Query by _id
     try: doc = await collection.find_one(query, session=session)
     except Exception as e: logger.error(f"Error getting document: {e}", exc_info=True); return None
     if doc: return Document(**doc) # Assumes schema handles alias
     else: logger.warning(f"Document {document_id} not found."); return None
 
 async def get_all_documents(
+    teacher_id: str, # <<< ADDED: Make teacher_id mandatory
     student_id: Optional[uuid.UUID] = None,
     assignment_id: Optional[uuid.UUID] = None,
     status: Optional[DocumentStatus] = None,
@@ -846,6 +870,7 @@ async def get_all_documents(
     if collection is None: return documents_list
 
     filter_query = soft_delete_filter(include_deleted)
+    filter_query["teacher_id"] = teacher_id # <<< ADDED: Filter by teacher_id
     if student_id: filter_query["student_id"] = student_id
     if assignment_id: filter_query["assignment_id"] = assignment_id
     if status: filter_query["status"] = status.value # Filter DB by enum value

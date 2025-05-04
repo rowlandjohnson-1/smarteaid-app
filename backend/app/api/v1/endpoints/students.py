@@ -77,7 +77,10 @@ async def read_student(
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} attempting to read student internal ID: {student_internal_id}")
 
-    student = await crud.get_student_by_id(student_internal_id=student_internal_id)
+    student = await crud.get_student_by_id(
+        student_internal_id=student_internal_id,
+        teacher_id=user_kinde_id
+    )
     if student is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -118,6 +121,7 @@ async def read_students(
     # that accepts a list of permissible student IDs based on the user's context.
 
     students = await crud.get_all_students(
+        teacher_id=user_kinde_id,
         external_student_id=external_student_id,
         first_name=first_name,
         last_name=last_name,
@@ -147,23 +151,26 @@ async def update_existing_student(
     logger.info(f"User {user_kinde_id} attempting to update student internal ID: {student_internal_id}")
 
     # --- Authorization Check ---
-    # TODO: Implement proper authorization. Can this user update this student?
-    # (e.g., is the student in one of the user's ClassGroups? Is user an admin?)
-    # This likely requires fetching the student or their class memberships first.
+    # First, check if the student exists AND belongs to the current user
+    existing_student = await crud.get_student_by_id(
+        student_internal_id=student_internal_id,
+        teacher_id=user_kinde_id # Use authenticated user's ID
+    )
     # --- End Authorization Check ---
 
     # Using the improved logic: check existence first
-    existing_student = await crud.get_student_by_id(student_internal_id=student_internal_id)
+    # existing_student = await crud.get_student_by_id(student_internal_id=student_internal_id)
     if not existing_student:
+        # This now correctly handles both not found and not authorized
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Student with internal ID {student_internal_id} not found."
+            detail=f"Student with internal ID {student_internal_id} not found or access denied."
         )
 
-    # Try to update
+    # Try to update (we know the user owns the student at this point)
     updated_student = await crud.update_student(student_internal_id=student_internal_id, student_in=student_in)
     if updated_student is None:
-        # If update failed after existence check, likely a duplicate external_student_id
+        # If update failed after existence/ownership check, likely a duplicate external_student_id
         if student_in.external_student_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -196,15 +203,30 @@ async def delete_existing_student(
     logger.info(f"User {user_kinde_id} attempting to delete student internal ID: {student_internal_id}")
 
     # --- Authorization Check ---
-    # TODO: Implement proper authorization. Can this user delete this student?
-    # (Requires checking user's relationship to student via ClassGroups/School or admin role)
-    # --- End Authorization Check ---
-
-    deleted_successfully = await crud.delete_student(student_internal_id=student_internal_id)
-    if not deleted_successfully:
+    # Check if the student exists AND belongs to the current user before deleting
+    student_to_delete = await crud.get_student_by_id(
+        student_internal_id=student_internal_id,
+        teacher_id=user_kinde_id # Use authenticated user's ID
+    )
+    if not student_to_delete:
+        # Raise 404 whether it doesn't exist or belongs to another user
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Student with internal ID {student_internal_id} not found."
+            detail=f"Student with internal ID {student_internal_id} not found or access denied."
+        )
+    # --- End Authorization Check ---
+
+    # Proceed with deletion only if the check above passed
+    deleted_successfully = await crud.delete_student(student_internal_id=student_internal_id)
+    if not deleted_successfully:
+        # This case should theoretically not happen if the check passed, but handle defensively
+        logger.error(f"Failed to delete student {student_internal_id} even after ownership check passed for user {user_kinde_id}.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not delete student with internal ID {student_internal_id} after authorization."
+            # Older code raised 404, but 500 seems more appropriate if it existed moments ago
+            # status_code=status.HTTP_404_NOT_FOUND,
+            # detail=f"Student with internal ID {student_internal_id} not found."
         )
     logger.info(f"Student internal ID {student_internal_id} deleted successfully by user {user_kinde_id}.")
     # No content returned on successful delete

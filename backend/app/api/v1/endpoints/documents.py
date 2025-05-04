@@ -174,7 +174,10 @@ async def trigger_assessment(
     logger.info(f"User {user_kinde_id} attempting to trigger assessment for document ID: {document_id}")
 
     # --- Get Document & Authorization Check ---
-    document = await crud.get_document_by_id(document_id=document_id)
+    document = await crud.get_document_by_id(
+        document_id=document_id,
+        teacher_id=user_kinde_id # <<< ADDED
+    )
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
 
@@ -403,7 +406,10 @@ async def read_document(
     """Protected endpoint to retrieve specific document metadata by its ID."""
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} attempting to read document ID: {document_id}")
-    document = await crud.get_document_by_id(document_id=document_id)
+    document = await crud.get_document_by_id(
+        document_id=document_id,
+        teacher_id=user_kinde_id # <<< ADDED
+    )
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
     # TODO: Add fine-grained authorization check
@@ -523,6 +529,7 @@ async def read_documents(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sort_order value. Use 1 for ascending or -1 for descending.")
 
     documents = await crud.get_all_documents(
+        teacher_id=user_kinde_id, # <<< ADDED: Pass teacher_id
         student_id=student_id,
         assignment_id=assignment_id,
         status=status,
@@ -548,11 +555,29 @@ async def update_document_processing_status(
     """Protected endpoint to update the status of a document."""
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} attempting to update status for document ID: {document_id} to {status_update.status}")
-    # TODO: Add authorization check: Who can update status?
     if status_update.status is None: raise HTTPException(status.HTTP_400_BAD_REQUEST, "Status field is required.")
-    # Assuming update_document_status expects the Enum member
+
+    # --- Authorization Check ---
+    # Check if the document exists AND belongs to the current user before updating status
+    doc_to_update = await crud.get_document_by_id(
+        document_id=document_id,
+        teacher_id=user_kinde_id # Use authenticated user's ID
+    )
+    if not doc_to_update:
+        # Raise 404 whether it doesn't exist or belongs to another user
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID {document_id} not found or access denied."
+        )
+    # --- End Authorization Check ---
+
+    # Proceed with status update only if the check above passed
     updated_document = await crud.update_document_status(document_id=document_id, status=status_update.status)
-    if updated_document is None: raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document {document_id} not found.")
+    if updated_document is None:
+        # This might happen if the doc was deleted between the check and the update (race condition)
+        # Or if crud.update_document_status failed for another reason
+        logger.error(f"Failed to update status for doc {document_id} even after ownership check passed for user {user_kinde_id}.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document {document_id} not found during status update.")
     # Log the string value from the input
     logger.info(f"Document {document_id} status updated to {status_update.status.value} by user {user_kinde_id}.")
     return updated_document

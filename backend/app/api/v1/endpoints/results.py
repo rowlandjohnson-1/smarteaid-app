@@ -51,17 +51,21 @@ async def read_result_for_document(
     # --- Authorization Check (Based on Document Access) ---
     # First, check if the associated document exists and if the user can access it
     # Assuming get_document_by_id respects soft delete if implemented
-    document = await crud.get_document_by_id(document_id=document_id)
+    document = await crud.get_document_by_id(
+        document_id=document_id,
+        teacher_id=user_kinde_id
+    )
     if document is None:
-        # If the document doesn't exist, the result cannot be accessed
+        # If the document doesn't exist OR doesn't belong to the user, the result cannot be accessed
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document with ID {document_id} not found."
+            detail=f"Document with ID {document_id} not found or access denied."
         )
+    # Authorization confirmed by successful fetch above
     # TODO: Add fine-grained authorization check:
     # Can user 'user_kinde_id' view this document (and therefore its result)?
     # (e.g., check relationship via student/assignment/classgroup/teacher)
-    logger.warning(f"Authorization check needed for user {user_kinde_id} reading result for document {document_id}")
+    # logger.warning(f"Authorization check needed for user {user_kinde_id} reading result for document {document_id}")
     # --- End Authorization Check ---
 
     # If authorized to view document, attempt to get the result
@@ -105,15 +109,19 @@ async def read_result(
     # --- Authorization Check (Based on Document Access) ---
     # Need to check if user can access the associated document
     # Assuming get_document_by_id respects soft delete if implemented
-    document = await crud.get_document_by_id(document_id=result.document_id)
+    document = await crud.get_document_by_id(
+        document_id=result.document_id,
+        teacher_id=user_kinde_id
+    )
     if document is None:
-         # Should not happen if result exists, implies data inconsistency
-         logger.error(f"Data inconsistency: Result {result_id} found but associated Document {result.document_id} missing.")
-         # Return 404 for the result, as the context is broken
-         raise HTTPException(status_code=404, detail="Associated document not found for result.")
+         # Should not happen if result exists, implies data inconsistency OR access denied
+         logger.warning(f"Document {result.document_id} not found or access denied for user {user_kinde_id} when fetching result {result_id}.")
+         # Return 404 for the result, as the context is broken or forbidden
+         raise HTTPException(status_code=404, detail="Result not found or access denied.")
+    # Authorization confirmed by successful fetch above
     # TODO: Add fine-grained authorization check:
     # Can user 'user_kinde_id' view this document (and therefore its result)?
-    logger.warning(f"Authorization check needed for user {user_kinde_id} reading result {result_id} linked to document {result.document_id}")
+    # logger.warning(f"Authorization check needed for user {user_kinde_id} reading result {result_id} linked to document {result.document_id}")
     # --- End Authorization Check ---
 
     return result
