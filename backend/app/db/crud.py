@@ -7,7 +7,7 @@ from pymongo.errors import DuplicateKeyError
 from pymongo.collation import Collation, CollationStrength # Add for case-insensitive aggregation if needed
 import uuid
 from typing import List, Optional, Dict, Any, TypeVar, Type, Tuple
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date as date_type # Avoid naming conflict with datetime module
 import logging
 import re
 from contextlib import asynccontextmanager
@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from azure.core.exceptions import ResourceNotFoundError 
 from azure.storage.blob import BlobServiceClient
 import os
+import calendar
 
 # --- Database Access ---
 from .database import get_database
@@ -116,7 +117,9 @@ def with_transaction(func):
 
 def soft_delete_filter(include_deleted: bool = False) -> Dict[str, Any]:
     if include_deleted: return {}
-    return {"deleted_at": None}
+    # return {"is_deleted": False} # Previous implementation
+    # NEW: Filter for documents where is_deleted is NOT True (includes missing or False)
+    return {"is_deleted": {"$ne": True}} 
 
 def _get_collection(collection_name: str) -> Optional[AsyncIOMotorCollection]:
     db = get_database()
@@ -902,160 +905,139 @@ async def get_all_documents(
     return documents_list
 
 @with_transaction
-async def update_document_status(document_id: uuid.UUID, status: DocumentStatus, session=None) -> Optional[Document]:
+async def update_document_status(
+    document_id: uuid.UUID,
+    status: DocumentStatus,
+    character_count: Optional[int] = None, # New optional parameter
+    word_count: Optional[int] = None,      # New optional parameter
+    session=None
+) -> Optional[Document]:
     collection = _get_collection(DOCUMENT_COLLECTION)
     if collection is None: return None
     now = datetime.now(timezone.utc)
-    update_data = {"status": status.value, "updated_at": now} # Store enum value
-    logger.info(f"Updating document {document_id} status to {status.value}")
+    # <<< START EDIT: Build update_data dictionary >>>
+    update_data = {
+        "status": status.value, # Store enum value
+        "updated_at": now
+    }
+    if character_count is not None:
+        update_data["character_count"] = character_count
+        logger.info(f"Including character_count={character_count} in update for document {document_id}")
+    if word_count is not None:
+        update_data["word_count"] = word_count
+        logger.info(f"Including word_count={word_count} in update for document {document_id}")
+    # <<< END EDIT >>>
+
+    logger.info(f"Updating document {document_id} status to {status.value} and counts if provided.") # Updated log
     query_filter = {"_id": document_id, "deleted_at": None} # Query by _id
-    try:
-        updated_doc = await collection.find_one_and_update(query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
-        if updated_doc: return Document(**updated_doc) # Assumes schema handles alias
-        else: logger.warning(f"Document {document_id} not found or already deleted for status update."); return None
-    except Exception as e: logger.error(f"Error updating document status for ID {document_id}: {e}", exc_info=True); return None
 
-@with_transaction
-async def delete_document(document_id: uuid.UUID, session=None) -> bool:
-    """
-    Delete a document from the database.
-    
-    Args:
-        document_id: UUID of the document to delete
-        session: Optional database session
-        
-    Returns:
-        bool: True if document was deleted, False otherwise
-    """
-    try:
-        collection = _get_collection(DOCUMENT_COLLECTION) # FIX: Use _get_collection
-        if collection is None: return False # Add check if collection retrieval failed
-        result = await collection.delete_one({"_id": document_id})
-        return result.deleted_count > 0
-    except Exception as e:
-        logger.error(f"Error deleting document {document_id}: {e}")
-        return False
-
-# --- Result CRUD Functions (Keep existing) ---
-# @with_transaction # Keep transaction commented out if needed
-async def create_result(result_in: ResultCreate, session=None) -> Optional[Result]:
-    collection = _get_collection(RESULT_COLLECTION)
-    if collection is None: return None
-    result_id = uuid.uuid4()
-    now = datetime.now(timezone.utc); result_dict = result_in.model_dump()
-    if isinstance(result_dict.get("status"), ResultStatus): result_dict["status"] = result_dict["status"].value
-    result_doc = result_dict
-    # Explicitly add teacher_id from the input model
-    if hasattr(result_in, 'teacher_id') and result_in.teacher_id:
-        result_doc["teacher_id"] = result_in.teacher_id
-    result_doc["_id"] = result_id; result_doc["created_at"] = now; result_doc["updated_at"] = now; result_doc["deleted_at"] = None
-    logger.info(f"Inserting result for document: {result_doc['document_id']}")
-    try:
-        inserted_result = await collection.insert_one(result_doc, session=session)
-        if inserted_result.acknowledged: created_doc = await collection.find_one({"_id": result_id}, session=session)
-        else: logger.error(f"Insert result not acknowledged: {result_id}"); return None
-        if created_doc: return Result(**created_doc) # Assumes schema handles alias
-        else: logger.error(f"Failed retrieve result post-insert: {result_id}"); return None
-    except Exception as e: logger.error(f"Error during result insertion: {e}", exc_info=True); return None
-
-async def get_result_by_id(result_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Result]:
-    collection = _get_collection(RESULT_COLLECTION)
-    if collection is None: return None
-    logger.info(f"Getting result: {result_id}")
-    query = {"_id": result_id}; query.update(soft_delete_filter(include_deleted)) # Query by _id
-    try: doc = await collection.find_one(query, session=session)
-    except Exception as e: logger.error(f"Error getting result: {e}", exc_info=True); return None
-    if doc: return Result(**doc) # Assumes schema handles alias
-    else: logger.warning(f"Result {result_id} not found."); return None
-
-@with_transaction
-async def update_result(result_id: uuid.UUID, update_data: Dict[str, Any], session=None) -> Optional[Result]:
-    """
-    Updates an existing Result record in the database using a raw dictionary.
-
-    Assumes 'paragraph_results' in update_data is already a list of dicts.
-    Includes enhanced logging.
-    """
-    collection = _get_collection(RESULT_COLLECTION)
-    if collection is None:
-        logger.error("Failed to get results collection for update.")
-        return None
-
-    now = datetime.now(timezone.utc)
-
-    # Log the raw data received by the function
-    logger.debug(f"crud.update_result received update_data for {result_id}: {update_data}")
-
-    # Prepare the dictionary for the $set operation
-    set_payload = {}
-
-    # Copy allowed fields from input update_data to set_payload
-    allowed_fields = ["score", "status", "label", "ai_generated", "human_generated", "paragraph_results", "result_timestamp"]
-    for field in allowed_fields:
-        if field in update_data and update_data[field] is not None:
-             # Special handling for status enum
-             if field == "status" and isinstance(update_data[field], ResultStatus):
-                 set_payload[field] = update_data[field].value # Store the enum value string
-             # --- FIX: Check for datetime for result_timestamp ---
-             elif field == "result_timestamp" and isinstance(update_data[field], datetime):
-                 set_payload[field] = update_data[field] # Store datetime object
-             # --- END FIX ---
-             else:
-                 set_payload[field] = update_data[field]
-
-    # Ensure 'paragraph_results' is a list of dicts if present
-    if "paragraph_results" in set_payload:
-        if not isinstance(set_payload["paragraph_results"], list) or \
-           not all(isinstance(item, dict) for item in set_payload["paragraph_results"]):
-            logger.warning(f"Invalid format for 'paragraph_results' in update data for {result_id}. Removing field.")
-            set_payload.pop("paragraph_results", None)
-        else:
-             logger.info(f"Preparing to save {len(set_payload['paragraph_results'])} paragraph results for {result_id}.")
-
-    # Check if there's anything left to update
-    if not set_payload:
-        logger.warning(f"No valid fields to update for result {result_id}")
-        # Return the existing document if no changes were made
-        return await get_result_by_id(result_id, include_deleted=False, session=session)
-
-    # Always set updated_at
-    set_payload["updated_at"] = now
-    # result_timestamp should be included in the incoming update_data if needed
-
-    logger.info(f"Updating result {result_id} with fields: {list(set_payload.keys())}")
-    # Log the exact payload for the $set operation
-    logger.debug(f"Payload for $set operation for result {result_id}: {set_payload}") # Check this log carefully
-
-    query_filter = {"_id": result_id, "deleted_at": None} # Query by internal _id
+    # <<< START EDIT: Add logging before DB call >>>
+    logger.debug(f"Attempting find_one_and_update for doc {document_id} with $set payload: {update_data}")
+    # <<< END EDIT >>>
 
     try:
-        # Perform the database update
+        # <<< START EDIT: Use update_data dictionary in $set >>> # This comment is from previous edits
         updated_doc = await collection.find_one_and_update(
             query_filter,
-            {"$set": set_payload}, # Use the prepared set_payload dictionary
-            return_document=ReturnDocument.AFTER, # Return the document *after* the update
-            session=session # Pass the session for transaction atomicity
+            {"$set": update_data}, # Use the built dictionary
+            return_document=ReturnDocument.AFTER,
+            session=session
         )
+        # <<< END EDIT >>>
+        if updated_doc: return Document(**updated_doc) # Assumes schema handles alias
+        else: logger.warning(f"Document {document_id} not found or already deleted for status/count update."); return None
+    except Exception as e: logger.error(f"Error updating document status/counts for ID {document_id}: {e}", exc_info=True); return None
 
-        # Process the result of the update
-        if updated_doc:
-            logger.info(f"Successfully updated result {result_id} in DB.")
-            logger.debug(f"Raw document returned from find_one_and_update for result {result_id}: {updated_doc}")
-            try:
-                # --- Use model_validate for potentially better error info ---
-                validated_result = Result.model_validate(updated_doc)
-                # --- End change ---
-                logger.debug(f"Validated Result object for {result_id} has paragraph_results: {'Yes' if validated_result.paragraph_results else 'No'}")
-                return validated_result
-            except Exception as pydantic_err:
-                logger.error(f"Pydantic validation failed for updated result {result_id} from DB: {pydantic_err}", exc_info=True)
-                return None # Failed validation
+@with_transaction
+async def delete_document(document_id: uuid.UUID, teacher_id: str, session=None) -> bool: # ADDED teacher_id
+    """
+    Performs deletion of a document and its associated data (blob, result).
+    Checks ownership using teacher_id before proceeding.
+    Performs a SOFT delete on the document record itself.
+
+    Args:
+        document_id: UUID of the document to delete.
+        teacher_id: Kinde ID of the user attempting deletion (for authorization).
+        session: Optional database session for transactions (REMOVED - no longer used here).
+
+    Returns:
+        True if deletion (including soft delete of document) was successful, False otherwise.
+    """
+    collection = _get_collection(DOCUMENT_COLLECTION)
+    if collection is None:
+        return False
+    now = datetime.now(timezone.utc)
+
+    # Fetch document first to check ownership and get blob path, even if soft-deleted
+    document = await get_document_by_id(
+        document_id=document_id,
+        teacher_id=teacher_id,
+        include_deleted=True, # Fetch even if already soft-deleted
+        session=None # REMOVED session
+    )
+    if not document:
+        logger.warning(f"Document {document_id} not found or not owned by teacher {teacher_id} during delete attempt.")
+        return False # Not found or not authorized
+
+    # If already soft-deleted, log and return True (idempotency)
+    if document.is_deleted: # CHANGED check from deleted_at to is_deleted
+        logger.info(f"Document {document_id} is already soft-deleted (is_deleted=True). Delete operation considered successful.") # Updated log
+        return True
+
+    blob_path_to_delete = document.storage_blob_path
+    result_to_delete = await get_result_by_document_id(
+        document_id=document_id,
+        include_deleted=True, # Also fetch associated result even if soft-deleted
+        session=None # REMOVED session
+    )
+
+    logger.info(f"Attempting delete for document {document_id} owned by {teacher_id}. Blob: {blob_path_to_delete}. Result ID: {getattr(result_to_delete, 'id', 'None')}.")
+
+    # --- REMOVED internal try...except block --- 
+
+    # --- Delete Blob (Propagate errors) ---
+    if blob_path_to_delete:
+        blob_deleted = await delete_blob(blob_path_to_delete)
+        if not blob_deleted:
+            logger.error(f"delete_blob failed for {blob_path_to_delete}. This might indicate an issue but delete process continues.")
+            # Allow continuing, but log clearly
         else:
-            logger.warning(f"Result {result_id} not found or already deleted during update attempt.")
-            return None
-    except Exception as e:
-        logger.error(f"Error updating result with ID {result_id}: {e}", exc_info=True)
-        return None
+            logger.info(f"Successfully deleted blob {blob_path_to_delete} for document {document_id}.")
+    else:
+        logger.warning(f"No storage_blob_path found for document {document_id}. Skipping blob deletion.")
+
+    # --- Delete Result (Propagate errors) ---
+    if result_to_delete:
+        result_deleted = await delete_result(result_id=result_to_delete.id, session=None)
+        if not result_deleted:
+            logger.error(f"delete_result failed for {result_to_delete.id}. This might indicate an issue but delete process continues.")
+            # Allow continuing, but log clearly
+        else:
+            logger.info(f"Successfully deleted result {result_to_delete.id} for document {document_id}.")
+
+    # --- Soft Delete Document (Propagate errors) ---
+    result = await collection.update_one(
+        # OLD Filter: {"_id": document_id, "is_deleted": False},
+        # NEW Filter: Match if is_deleted is not True (handles False, null, missing)
+        {"_id": document_id, "is_deleted": {"$ne": True}}, 
+        {"$set": {"is_deleted": True, "updated_at": now}},
+        session=None
+    )
+    count = result.modified_count
+
+    if count == 1:
+        logger.info(f"Successfully soft-deleted document {document_id} (set is_deleted=True)")
+        delete_success = True
+    else: # count == 0
+        logger.warning(
+            f"Document {document_id} soft-delete update modified 0 records. "
+            f"Assuming already deleted or gone (idempotent success)."
+        )
+        delete_success = True # Treat as success for idempotency
+
+    # Log final intended return value (still useful)
+    logger.critical(f"!!! FINAL INTENDED RETURN VALUE for delete_document({document_id}): {delete_success} (Type: {type(delete_success)}) ")
+    return delete_success # Let any exceptions from await calls above propagate
 
 # --- Optional: Add logging to get_result_by_document_id ---
 async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Result]:
@@ -1084,7 +1066,140 @@ async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: boo
         return None
 # --- End optional logging ---
 
-# === Dashboard CRUD Functions ===
+# <<< START NEW FUNCTION: create_result >>>
+# @with_transaction # Decide if transactions are needed for single insert
+async def create_result(result_in: ResultCreate, session=None) -> Optional[Result]:
+    """
+    Creates a new result record in the database, typically with a PENDING status.
+
+    Args:
+        result_in: Pydantic model containing result data to create.
+        session: Optional Motor session for transaction management.
+
+    Returns:
+        The created Result object or None if creation failed.
+    """
+    collection = _get_collection(RESULT_COLLECTION)
+    if collection is None:
+        logger.error("Failed to get results collection for create_result")
+        return None
+
+    now = datetime.now(timezone.utc)
+    new_result_id = uuid.uuid4()
+
+    # Prepare the document dictionary from the input model
+    result_doc = result_in.model_dump(exclude_unset=True) # Start with provided data
+
+    # Set mandatory fields
+    result_doc["_id"] = new_result_id
+    result_doc["created_at"] = now
+    result_doc["updated_at"] = now
+    result_doc["deleted_at"] = None # Ensure soft delete field is initialized
+
+    # Set default status if not provided in result_in (should usually be PENDING)
+    if "status" not in result_doc:
+        result_doc["status"] = ResultStatus.PENDING.value
+    elif isinstance(result_doc["status"], ResultStatus): # Convert Enum to value if passed
+        result_doc["status"] = result_doc["status"].value
+
+    # Ensure other fields expected by Result model have defaults if not in ResultCreate
+    # (e.g., score, label, ai_generated, human_generated, paragraph_results might be None initially)
+    result_doc.setdefault("score", None)
+    result_doc.setdefault("label", None)
+    result_doc.setdefault("ai_generated", None)
+    result_doc.setdefault("human_generated", None)
+    result_doc.setdefault("paragraph_results", None)
+
+
+    logger.info(f"Attempting to insert result with internal ID: {new_result_id} for document: {result_doc.get('document_id')}")
+
+    try:
+        inserted_result = await collection.insert_one(result_doc, session=session)
+        if inserted_result.acknowledged:
+            # Fetch the newly created document to return the full Result model
+            created_doc = await collection.find_one({"_id": new_result_id}, session=session)
+            if created_doc:
+                return Result(**created_doc) # Validate and return the full model
+            else:
+                logger.error(f"Failed to retrieve result post-insert: {new_result_id}")
+                return None
+        else:
+            logger.error(f"Insert result not acknowledged: {new_result_id}")
+            return None
+    except Exception as e:
+        logger.error(f"Error inserting result for document {result_doc.get('document_id')}: {e}", exc_info=True)
+        return None
+# <<< END NEW FUNCTION: create_result >>>
+
+@with_transaction
+async def update_result(
+    result_id: uuid.UUID,
+    update_data: Dict[str, Any], # Pass update data as a dictionary
+    session=None
+) -> Optional[Result]:
+    """
+    Updates an existing result record by its ID.
+
+    Args:
+        result_id: The UUID of the result to update.
+        update_data: A dictionary containing the fields to update.
+        session: Optional MongoDB session for transactions.
+
+    Returns:
+        The updated Result object, or None if not found or on error.
+    """
+    collection = _get_collection(RESULT_COLLECTION)
+    now = datetime.now(timezone.utc)
+    if collection is None:
+        logger.error("Result collection not found during update.")
+        return None
+
+    # Ensure _id is not in update data and add updated_at timestamp
+    update_data.pop("_id", None)
+    update_data.pop("id", None)
+    update_data.pop("created_at", None) # Don't allow updating creation time
+    update_data.pop("document_id", None) # Don't allow changing the linked document
+    update_data.pop("teacher_id", None) # Don't allow changing the teacher ID here
+
+    # Convert enums to their values if necessary (e.g., ResultStatus)
+    if "status" in update_data and isinstance(update_data["status"], ResultStatus):
+        update_data["status"] = update_data["status"].value
+
+    if not update_data:
+        logger.warning(f"No valid update data provided for result {result_id}. Fetching current.")
+        # If no fields left to update, maybe just return the current object
+        return await get_result_by_id(result_id=result_id, session=session) # Assuming get_result_by_id exists
+
+    update_data["updated_at"] = now
+
+    logger.info(f"Attempting to update result {result_id} with data: {update_data}")
+
+    # Find and update the non-deleted result
+    query_filter = {"_id": result_id, "is_deleted": {"$ne": True}}
+    update_operation = {"$set": update_data}
+
+    try:
+        updated_doc = await collection.find_one_and_update(
+            query_filter,
+            update_operation,
+            return_document=ReturnDocument.AFTER,
+            session=session
+        )
+
+        if updated_doc:
+            logger.info(f"Successfully updated result {result_id}")
+            # Validate and return the updated result
+            try:
+                return Result(**updated_doc)
+            except ValidationError as e:
+                logger.error(f"Validation error for updated result {result_id}: {e}", exc_info=True)
+                return None # Or raise an internal error
+        else:
+            logger.warning(f"Result {result_id} not found or already deleted, cannot update.")
+            return None
+    except Exception as e:
+        logger.error(f"Error updating result {result_id}: {e}", exc_info=True)
+        return None
 
 async def get_dashboard_stats(current_user_payload: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -1702,4 +1817,138 @@ async def delete_blob(blob_path: str) -> bool:
     except Exception as e:
         logger.error(f"Error deleting blob {blob_path}: {e}", exc_info=True) # Log traceback
         return False
- 
+
+# <<< START EDIT: Add new analytics CRUD function >>>
+async def get_usage_stats_for_period(
+    teacher_id: str,
+    period: str, # 'daily', 'weekly', 'monthly'
+    target_date: date_type # Use the aliased date type
+) -> Optional[Dict[str, Any]]: # Matches UsageStatsResponse structure
+    """
+    Aggregates document usage stats (count, characters, words) for a specific teacher
+    over a given period (daily, weekly, monthly) based on a target date.
+
+    Args:
+        teacher_id: The Kinde ID of the teacher.
+        period: The time period ('daily', 'weekly', 'monthly').
+        target_date: The date defining the period.
+
+    Returns:
+        A dictionary containing the aggregated stats and period info, or None on error.
+    """
+    collection = _get_collection(DOCUMENT_COLLECTION)
+    if collection is None:
+        logger.error(f"Failed to get document collection for usage stats (teacher: {teacher_id})")
+        return None
+
+    logger.info(f"Calculating usage stats for teacher {teacher_id}, period={period}, target_date={target_date}")
+
+    # --- Calculate Date Range in UTC --- START ---
+    start_datetime_utc: Optional[datetime] = None
+    end_datetime_utc: Optional[datetime] = None
+    start_date_local: Optional[date_type] = None # For response
+    end_date_local: Optional[date_type] = None   # For response
+
+    try:
+        # Combine target_date with min/max time and make timezone-aware (UTC)
+        min_time = datetime.min.time()
+        max_time_plus_one = (datetime.combine(target_date, min_time) + timedelta(days=1)).time()
+
+        if period == 'daily':
+            start_date_local = target_date
+            end_date_local = target_date
+            start_datetime_utc = datetime.combine(target_date, min_time, tzinfo=timezone.utc)
+            # End date is the beginning of the *next* day, exclusive
+            end_datetime_utc = datetime.combine(target_date + timedelta(days=1), min_time, tzinfo=timezone.utc)
+
+        elif period == 'weekly':
+            # Monday is 0, Sunday is 6. Calculate start of week (Monday).
+            start_of_week = target_date - timedelta(days=target_date.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            start_date_local = start_of_week
+            end_date_local = end_of_week
+            start_datetime_utc = datetime.combine(start_of_week, min_time, tzinfo=timezone.utc)
+            # End date is the beginning of the day *after* the week ends, exclusive
+            end_datetime_utc = datetime.combine(end_of_week + timedelta(days=1), min_time, tzinfo=timezone.utc)
+
+        elif period == 'monthly':
+            # Get the first and last day of the month
+            first_day_of_month = target_date.replace(day=1)
+            last_day_of_month = target_date.replace(day=calendar.monthrange(target_date.year, target_date.month)[1])
+            start_date_local = first_day_of_month
+            end_date_local = last_day_of_month
+            start_datetime_utc = datetime.combine(first_day_of_month, min_time, tzinfo=timezone.utc)
+            # End date is the beginning of the day *after* the month ends, exclusive
+            end_datetime_utc = datetime.combine(last_day_of_month + timedelta(days=1), min_time, tzinfo=timezone.utc)
+        else:
+            raise ValueError(f"Invalid period specified: {period}")
+
+        logger.debug(f"Calculated UTC range for {teacher_id}, {period}: {start_datetime_utc} to {end_datetime_utc}")
+
+    except Exception as date_err:
+        logger.error(f"Error calculating date range for usage stats: {date_err}", exc_info=True)
+        return None # Or raise a specific error
+    # --- Calculate Date Range in UTC --- END ---
+
+    # --- Aggregation Pipeline --- START ---
+    pipeline = [
+        {
+            '$match': {
+                'teacher_id': teacher_id, # Crucial RBAC filter
+                'upload_timestamp': {
+                    '$gte': start_datetime_utc, # Greater than or equal to start
+                    '$lt': end_datetime_utc    # Less than end (exclusive)
+                }
+            }
+        },
+        {
+            '$group': {
+                '_id': None, # Group all matched documents together
+                'document_count': {'$sum': 1},
+                # Sum counts, treating null/missing as 0
+                'total_characters': {'$sum': {'$ifNull': ['$character_count', 0]}},
+                'total_words': {'$sum': {'$ifNull': ['$word_count', 0]}}
+            }
+        }
+    ]
+    # --- Aggregation Pipeline --- END ---
+
+    try:
+        aggregation_result = await collection.aggregate(pipeline).to_list(length=1)
+        logger.debug(f"Usage stats aggregation result for {teacher_id}, {period}: {aggregation_result}")
+
+        # --- Process Results --- START ---
+        if aggregation_result:
+            stats = aggregation_result[0]
+            result_payload = {
+                "period": period,
+                "target_date": target_date,
+                "start_date": start_date_local,
+                "end_date": end_date_local,
+                "document_count": stats.get('document_count', 0),
+                "total_characters": stats.get('total_characters', 0),
+                "total_words": stats.get('total_words', 0),
+                "teacher_id": teacher_id
+            }
+        else:
+            # No documents found in the period for this teacher
+            logger.info(f"No documents found for usage stats (teacher: {teacher_id}, period: {period}, target: {target_date})")
+            result_payload = {
+                "period": period,
+                "target_date": target_date,
+                "start_date": start_date_local,
+                "end_date": end_date_local,
+                "document_count": 0,
+                "total_characters": 0,
+                "total_words": 0,
+                "teacher_id": teacher_id
+            }
+        # --- Process Results --- END ---
+
+        logger.info(f"Successfully retrieved usage stats for {teacher_id}, period={period}: {result_payload}")
+        return result_payload
+
+    except Exception as e:
+        logger.error(f"Error during usage stats aggregation for teacher {teacher_id}: {e}", exc_info=True)
+        return None # Indicate failure
+# <<< END EDIT: Add new analytics CRUD function >>> 

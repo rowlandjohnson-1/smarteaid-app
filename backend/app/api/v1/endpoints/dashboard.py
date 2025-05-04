@@ -81,26 +81,63 @@ async def get_score_distribution_endpoint(
         logger.error(f"!!! EXCEPTION IN /dashboard/score-distribution ENDPOINT: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal error fetching score distribution.")
 
-@router.get("/recent", response_model=List[Document])
-async def get_recent_documents(
+@router.get("/recent")
+async def get_recent_documents_endpoint(
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """
-    Get the most recent documents for the current user.
+    Retrieves the 5 most recent documents for the logged-in teacher.
     """
-    logger.info(f"Endpoint /dashboard/recent called. Payload sub: {current_user_payload.get('sub')}")
+    teacher_id = None # Initialize for logging in case of early error
     try:
-        # Get the teacher's Kinde ID from the payload
-        teacher_id = current_user_payload.get("sub")
+        teacher_id = current_user_payload.get("sub") # Kinde user ID is in 'sub' claim
         if not teacher_id:
-            logger.error("User ID (sub) not found in token payload for /dashboard/recent")
-            raise HTTPException(status_code=400, detail="User ID not found in token")
-            
-        # Get recent documents
-        documents = await crud.get_recent_documents(teacher_id=teacher_id)
-        logger.info(f"Endpoint /dashboard/recent returning {len(documents)} documents.")
-        return documents
-        
+            # Log the payload for debugging if teacher_id is missing
+            logger.warning(f"Teacher ID ('sub') missing in token payload: {current_user_payload}")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Could not validate credentials or user ID missing")
+
+        logger.info(f"Endpoint /dashboard/recent called for teacher {teacher_id}")
+
+        # Get recent documents using the CRUD function
+        # crud.get_recent_documents returns a List[Document]
+        documents: List[Document] = await crud.get_recent_documents(teacher_id=teacher_id, limit=5) # Explicit limit
+        logger.info(f"Endpoint /dashboard/recent - CRUD returned {len(documents)} documents.")
+
+        # <<< START EDIT: Explicitly serialize response >>>
+        response_data = []
+        for doc in documents:
+            # Manually construct the dictionary for the response
+            # Accessing the attributes of the Pydantic model instance
+            doc_dict = {
+                # Ensure id is explicitly included using the model attribute
+                "id": doc.id,
+                "teacher_id": doc.teacher_id,
+                "original_filename": doc.original_filename,
+                "status": doc.status, # Will use enum value due to model config
+                "created_at": doc.created_at,
+                "updated_at": doc.updated_at,
+                # The frontend AnalyticsPage table needs the AI score, but it's not here.
+                # needs modification later to fetch/include score if required here.
+            }
+            # Add optional fields only if they exist and needed by frontend
+            # <<< START EDIT: Add counts if they exist >>>
+            if hasattr(doc, 'character_count') and doc.character_count is not None:
+                 doc_dict["character_count"] = doc.character_count
+            if hasattr(doc, 'word_count') and doc.word_count is not None:
+                 doc_dict["word_count"] = doc.word_count
+            # <<< END EDIT >>>
+
+            response_data.append(doc_dict)
+        # <<< END EDIT: Explicitly serialize response >>>
+
+        # Log the exact data being returned
+        logger.info(f"Returning response data for /dashboard/recent: {response_data}")
+        return response_data # Return the list of dictionaries
+
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions directly
+        raise http_exc
     except Exception as e:
-        logger.error(f"Error in /dashboard/recent: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in /dashboard/recent endpoint for teacher {teacher_id}: {e}", exc_info=True)
+        # Raise a generic 500 error for unexpected issues
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error fetching recent documents.")

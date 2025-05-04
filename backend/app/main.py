@@ -16,16 +16,15 @@ from app.db.database import connect_to_mongo, close_mongo_connection, check_data
 # Import all endpoint routers
 # Adjust path '.' based on where main.py is relative to 'api'
 # Includes routers for all entities: schools, teachers, class_groups, students, assignments, documents, results
-from app.api.v1.endpoints import (
-    schools,
-    teachers,
-    class_groups,
-    students,
-    assignments,
-    documents,  # Includes documents router import
-    results,    # Includes results router import
-    dashboard   # NEW: Import dashboard router
-)
+from app.api.v1.endpoints.schools import router as schools_router
+from app.api.v1.endpoints.teachers import router as teachers_router
+from app.api.v1.endpoints.class_groups import router as class_groups_router
+from app.api.v1.endpoints.students import router as students_router
+from app.api.v1.endpoints.assignments import router as assignments_router
+from app.api.v1.endpoints.documents import router as documents_router
+from app.api.v1.endpoints.results import router as results_router
+from app.api.v1.endpoints.dashboard import router as dashboard_router
+from app.api.v1.endpoints.analytics import router as analytics_router
 
 # Import batch processor
 from app.tasks import batch_processor
@@ -147,14 +146,15 @@ async def health_check() -> Dict[str, Any]:
 
 # --- Include API Routers ---
 # Apply the configured prefix (e.g., /api/v1) to all included routers
-app.include_router(schools.router, prefix=API_V1_PREFIX)
-app.include_router(teachers.router, prefix=API_V1_PREFIX)
-app.include_router(class_groups.router, prefix=API_V1_PREFIX)
-app.include_router(students.router, prefix=API_V1_PREFIX)
-app.include_router(assignments.router, prefix=API_V1_PREFIX)
-app.include_router(documents.router, prefix=API_V1_PREFIX) # Includes documents router
-app.include_router(results.router, prefix=API_V1_PREFIX)   # Includes results router
-app.include_router(dashboard.router, prefix=API_V1_PREFIX) # NEW: Include dashboard router
+app.include_router(schools_router, prefix=API_V1_PREFIX)
+app.include_router(teachers_router, prefix=API_V1_PREFIX)
+app.include_router(class_groups_router, prefix=API_V1_PREFIX)
+app.include_router(students_router, prefix=API_V1_PREFIX)
+app.include_router(assignments_router, prefix=API_V1_PREFIX)
+app.include_router(documents_router, prefix=API_V1_PREFIX) # Includes documents router
+app.include_router(results_router, prefix=API_V1_PREFIX)   # Includes results router
+app.include_router(dashboard_router, prefix=API_V1_PREFIX) # NEW: Include dashboard router
+app.include_router(analytics_router, prefix=API_V1_PREFIX)
 
 # Add a simple health check endpoint directly to the app
 @app.get("/api/v1/test-health")

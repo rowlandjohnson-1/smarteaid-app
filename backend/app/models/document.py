@@ -26,6 +26,10 @@ class DocumentBase(BaseModel):
     processing_attempts: Optional[int] = Field(default=0, description="Number of processing attempts")
     error_message: Optional[str] = Field(default=None, description="Error message if processing failed")
 
+    # Analytics fields
+    character_count: Optional[int] = Field(default=None, description="Number of characters in the extracted text")
+    word_count: Optional[int] = Field(default=None, description="Number of words in the extracted text")
+
     # Pydantic V2 model config (can be defined here or in inheriting classes)
     model_config = ConfigDict(
         from_attributes=True,

@@ -12,6 +12,7 @@ from fastapi import (
 from fastapi.responses import PlainTextResponse, JSONResponse # Added JSONResponse
 from datetime import datetime, timezone
 import httpx # Import httpx for making external API calls
+import re # Import re for word count calculation
 
 # Import models
 # Adjust path based on your structure if needed
@@ -210,12 +211,32 @@ async def trigger_assessment(
     if result:
         # --- Pass dictionary directly to crud.update_result ---
         await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ASSESSING})
+        logger.info(f"Existing result record found for doc {document_id}, updated status to ASSESSING.")
     else:
         # Handle case where result record didn't exist (should have been created on upload)
-        logger.error(f"Result record missing for document {document_id} during assessment trigger.")
-        # Create it now? Or raise error? Let's raise for now.
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR) # Revert doc status
-        raise HTTPException(status_code=500, detail="Internal error: Result record missing.")
+        logger.warning(f"Result record missing for document {document_id} during assessment trigger. Creating one now.")
+        # Create it now with ASSESSING status.
+        # await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR) # REMOVED: Revert doc status
+        # raise HTTPException(status_code=500, detail="Internal error: Result record missing.") # REMOVED: Raise error
+
+        # <<< ADDED: Create the result record >>>
+        result_data = ResultCreate(
+            score=None, 
+            status=ResultStatus.ASSESSING, # Start with ASSESSING status
+            result_timestamp=datetime.now(timezone.utc), 
+            document_id=document_id, 
+            teacher_id=user_kinde_id # Use the authenticated user's ID
+        )
+        created_result = await crud.create_result(result_in=result_data)
+        if not created_result:
+            logger.error(f"Failed to create missing result record for document {document_id}. Assessment cannot proceed.")
+            # If creation fails even here, revert doc status and raise error
+            await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+            raise HTTPException(status_code=500, detail="Internal error: Failed to create necessary result record.")
+        else:
+            logger.info(f"Successfully created missing result record {created_result.id} for doc {document_id} with status ASSESSING.")
+            result = created_result # Use the newly created result for subsequent steps
+        # <<< END ADDED >>>
 
     # --- Text Extraction ---
     extracted_text: Optional[str] = None
@@ -251,10 +272,22 @@ async def trigger_assessment(
 
         logger.info(f"Successfully extracted text ({len(extracted_text)} chars) for document {document_id}")
 
+        # Calculate character count
+        character_count = len(extracted_text)
+        # Calculate word count (split by whitespace, filter empty)
+        words = re.split(r'\s+', extracted_text.strip()) # Use regex for robust splitting
+        word_count = len([word for word in words if word]) # Count non-empty strings
+        logger.info(f"Calculated counts for document {document_id}: Chars={character_count}, Words={word_count}")
+
     except Exception as e:
         logger.error(f"Failed text extraction stage for document {document_id}: {e}", exc_info=True)
         # Update status to ERROR
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        await crud.update_document_status(
+            document_id=document_id,
+            status=DocumentStatus.ERROR,
+            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
+            word_count=word_count if 'word_count' in locals() else None
+        )
         # --- Pass dictionary directly to crud.update_result ---
         if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process document text: {e}")
@@ -312,19 +345,34 @@ async def trigger_assessment(
     # ... (error handling for ML API call remains the same) ...
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP error calling ML API for document {document_id}: {e.response.status_code} - {e.response.text}", exc_info=False)
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        await crud.update_document_status(
+            document_id=document_id,
+            status=DocumentStatus.ERROR,
+            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
+            word_count=word_count if 'word_count' in locals() else None
+        )
         # --- Pass dictionary directly to crud.update_result ---
         if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error communicating with AI detection service: {e.response.status_code}")
     except ValueError as e:
         logger.error(f"Error processing ML API response for document {document_id}: {e}", exc_info=True)
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        await crud.update_document_status(
+            document_id=document_id,
+            status=DocumentStatus.ERROR,
+            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
+            word_count=word_count if 'word_count' in locals() else None
+        )
         # --- Pass dictionary directly to crud.update_result ---
         if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI detection result: {e}")
     except Exception as e:
         logger.error(f"Unexpected error during ML API call or processing for document {document_id}: {e}", exc_info=True)
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        await crud.update_document_status(
+            document_id=document_id,
+            status=DocumentStatus.ERROR,
+            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
+            word_count=word_count if 'word_count' in locals() else None
+        )
         # --- Pass dictionary directly to crud.update_result ---
         if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get AI detection result: {e}")
@@ -353,33 +401,53 @@ async def trigger_assessment(
 
             # --- Call CRUD update function with the dictionary ---
             # +++ ADDED: Log payload before update +++
-            logger.debug(f"Attempting to update result {result.id} with payload: {update_payload_dict}")
-            # +++ END ADDED +++
-            final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict) # Pass dict
-            # +++ ADDED: Log final result content +++
-            if final_result:
-                 para_results_content = final_result.paragraph_results
-                 logger.debug(f"crud.update_result returned for {result.id}. paragraph_results type: {type(para_results_content)}, length: {len(para_results_content) if para_results_content else 0}")
-                 if para_results_content and isinstance(para_results_content, list) and len(para_results_content) > 0:
-                      logger.debug(f"First paragraph result item type: {type(para_results_content[0])}") # Check if it's a ParagraphResult object
-            else:
-                 logger.warning(f"crud.update_result returned None for {result.id}")
-            # +++ END ADDED +++
+            logger.debug(f"Attempting to update Result {result.id} with payload: {update_payload_dict}")
+            final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict)
 
             if final_result:
-                await crud.update_document_status(document_id=document_id, status=DocumentStatus.COMPLETED)
-                logger.info(f"Assessment completed for document {document_id}. Score: {ai_score}, Label: {ml_label}, Paragraphs: {len(ml_paragraph_results_raw or [])}")
+                logger.info(f"Successfully updated result for document {document_id}")
+                # Update document status to COMPLETED after successfully updating result
+                logger.debug(
+                    f"Calling update_document_status for COMPLETED. Doc ID: {document_id}, "
+                    f"Char Count: {character_count}, Word Count: {word_count}"
+                )
+                await crud.update_document_status(
+                    document_id=document_id,
+                    status=DocumentStatus.COMPLETED,
+                    character_count=character_count, # Pass calculated counts
+                    word_count=word_count
+                )
             else:
-                 logger.error(f"Failed to update result record {result.id} in database, crud.update_result returned None.")
-                 raise ValueError("Failed to update result record in database.")
+                logger.error(f"Failed to update result record for document {document_id} after ML processing.")
+                # If result update failed, set document status back to ERROR
+                await crud.update_document_status(
+                    document_id=document_id,
+                    status=DocumentStatus.ERROR,
+                    character_count=character_count, # Still pass counts even on error
+                    word_count=word_count
+                )
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save analysis results.")
+
         else:
-             logger.error(f"Result object became None unexpectedly for document {document_id}.")
-             raise ValueError("Result record unavailable for update.")
+            # This case should ideally not be reached if result creation on upload is robust
+            logger.error(f"Result record not found during final update stage for document {document_id}")
+            # Update document status back to ERROR
+            await crud.update_document_status(
+                document_id=document_id,
+                status=DocumentStatus.ERROR,
+                character_count=character_count, # Pass counts
+                word_count=word_count
+            )
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal error: Result record missing during final update.")
 
-    # ... (error handling for DB update remains the same) ...
     except Exception as e:
         logger.error(f"Failed to update database after successful ML API call for document {document_id}: {e}", exc_info=True)
-        await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+        await crud.update_document_status(
+            document_id=document_id,
+            status=DocumentStatus.ERROR,
+            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
+            word_count=word_count if 'word_count' in locals() else None
+        )
         # --- Pass dictionary directly to crud.update_result ---
         if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save assessment result.")
@@ -439,11 +507,18 @@ async def get_document_text(
     user_kinde_id = current_user_payload.get("sub")
     logger.info(f"User {user_kinde_id} requesting extracted text for document ID: {document_id}")
 
-    # 1. Fetch document metadata
-    document = await crud.get_document_by_id(document_id=document_id)
-    if document is None:
-        logger.warning(f"Document {document_id} not found for text extraction request by user {user_kinde_id}.")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
+    # --- Authorization & Document Fetch ---
+    # 1. Fetch the document and implicitly check ownership
+    document = await crud.get_document_by_id(
+        document_id=document_id,
+        teacher_id=user_kinde_id # Filter by current user's ID
+    )
+    if not document:
+        # Raise 404 if document doesn't exist OR doesn't belong to the user
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID {document_id} not found or access denied."
+        )
 
     # 2. TODO: Authorization Check
     logger.warning(f"Authorization check needed for user {user_kinde_id} accessing text of document {document_id}")
@@ -516,7 +591,7 @@ async def read_documents(
     skip: int = Query(0, ge=0, description="Number of records to skip for pagination"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
     sort_by: Optional[str] = Query(None, description="Field to sort by (e.g., 'upload_timestamp', 'original_filename')"),
-    sort_order: int = Query(-1, description="Sort order: 1 for ascending, -1 for descending"),
+    sort_order_str: str = Query("desc", description="Sort order: 'asc' or 'desc'"),
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """Protected endpoint to retrieve a list of document metadata."""
@@ -524,20 +599,40 @@ async def read_documents(
     logger.info(f"User {user_kinde_id} attempting to read list of documents with filters/sorting.")
     # TODO: Add authorization logic (filter results based on user's access)
 
-    # Validate sort_order if provided explicitly
-    if sort_order not in [1, -1]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sort_order value. Use 1 for ascending or -1 for descending.")
+    # Map sort_order_str to integer
+    if sort_order_str.lower() == "asc":
+        sort_order_int = 1
+    elif sort_order_str.lower() == "desc":
+        sort_order_int = -1
+    else:
+        # Raise error if the value is invalid
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid sort_order value. Use 'asc' or 'desc'."
+        )
 
     documents = await crud.get_all_documents(
-        teacher_id=user_kinde_id, # <<< ADDED: Pass teacher_id
+        teacher_id=user_kinde_id, # Pass teacher_id
         student_id=student_id,
         assignment_id=assignment_id,
         status=status,
         skip=skip,
         limit=limit,
         sort_by=sort_by,
-        sort_order=sort_order
+        sort_order=sort_order_int
     )
+    # <<< START EDIT: Add debug log before returning >>>
+    # Log the content being returned, limiting length if needed for brevity
+    docs_to_log = []
+    for doc in documents:
+        try:
+            # Use model_dump to get a dict, might reveal issues if model is complex
+            docs_to_log.append(doc.model_dump(mode='json')) 
+        except Exception as log_e:
+            logger.warning(f"Could not serialize document {getattr(doc, 'id', 'N/A')} for logging: {log_e}")
+            docs_to_log.append({"id": str(getattr(doc, 'id', 'N/A')), "error": "Serialization failed for log"})
+    logger.debug(f"Returning documents for GET /documents endpoint: {docs_to_log}")
+    # <<< END EDIT >>>
     return documents
 
 @router.put(
@@ -585,61 +680,39 @@ async def update_document_processing_status(
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a document record (Protected)",
-    description="Deletes a document metadata record. Requires authentication. Does NOT delete the file from Blob Storage."
+    summary="Delete a document and associated data (Protected)",
+    description="Soft-deletes a document metadata record, and attempts to delete the associated file from Blob Storage and the analysis result. Requires authentication."
 )
 async def delete_document(
     document_id: uuid.UUID,
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """
-    Delete a document and its associated data.
-    
-    This endpoint:
-    1. Deletes the document from the database
-    2. Deletes the associated blob from storage
-    3. Deletes any associated results
-    
-    Args:
-        document_id: UUID of the document to delete
-        current_user_payload: Current authenticated user payload
-    
-    Raises:
-        HTTPException: If document not found or user not authorized
+    Protected endpoint to soft-delete a document and its associated blob/result.
+    Deletion is handled by the CRUD layer.
     """
+    user_kinde_id = current_user_payload.get("sub")
+    logger.info(f"User {user_kinde_id} attempting to delete document ID: {document_id}")
+
     try:
-        # Get the document first to check ownership and get blob path
-        document = await crud.get_document_by_id(document_id=document_id)
-        if not document:
-            raise HTTPException(status_code=404, detail="Document not found")
-            
-        # Check if user owns the document
-        if document.teacher_id != current_user_payload.get("sub"):
-            raise HTTPException(status_code=403, detail="Not authorized to delete this document")
-            
-        # Delete the blob from storage
-        if document.storage_blob_path:
-            try:
-                await crud.delete_blob(document.storage_blob_path)
-            except Exception as e:
-                logger.error(f"Error deleting blob {document.storage_blob_path}: {e}")
-                # Continue with deletion even if blob deletion fails
-                
-        # Delete associated result if it exists
-        result = await crud.get_result_by_document_id(document_id=document_id)
-        if result:
-            await crud.delete_result(result_id=result.id)
-            
-        # Delete the document
-        success = await crud.delete_document(document_id=document_id)
+        # Call the updated CRUD function which now handles auth, blob, result, and soft delete
+        success = await crud.delete_document(document_id=document_id, teacher_id=user_kinde_id)
+
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to delete document")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+            logger.warning(f"crud.delete_document returned False for document {document_id} initiated by user {user_kinde_id}.")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found or delete operation failed.")
+
+        logger.info(f"Successfully processed delete request for document {document_id} by user {user_kinde_id}.")
+        # No explicit return needed here for 204 status code
+
+    except Exception as e: # Catch ALL exceptions here
+        if isinstance(e, HTTPException):
+            # If it's an HTTPException we intentionally raised (like the 404)
+            raise e # Re-raise it as is
+        else:
+            # For any other unexpected exception
+            logger.error(f"Unexpected error in delete document endpoint for {document_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during document deletion.")
 
 @router.post(
     "/batch",
@@ -837,4 +910,146 @@ async def get_batch_status(
         **batch.dict(),
         document_ids=[doc.id for doc in documents]
     )
+
+@router.post(
+    "/{document_id}/reset",
+    status_code=status.HTTP_200_OK,
+    summary="Reset a stuck document assessment (Protected)",
+    description="Sets the status of a document and its associated result back to ERROR. Useful for assessments stuck in PROCESSING/ASSESSING.",
+    response_model=Dict[str, str] # Simple confirmation message
+)
+async def reset_assessment_status(
+    document_id: uuid.UUID,
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    user_kinde_id = current_user_payload.get("sub")
+    if not user_kinde_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+
+    logger.info(f"User {user_kinde_id} attempting to reset status for document {document_id}")
+
+    # --- Get Document and Result (Check Ownership) ---
+    document = await crud.get_document_by_id(document_id=document_id, teacher_id=user_kinde_id, include_deleted=True)
+    if not document:
+        logger.warning(f"Reset attempt failed: Document {document_id} not found or not owned by user {user_kinde_id}.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found or access denied.")
+
+    result = await crud.get_result_by_document_id(document_id=document_id, include_deleted=True)
+
+    # --- Update Document Status ---    
+    logger.info(f"Resetting document {document_id} status to ERROR.")
+    updated_doc = await crud.update_document_status(
+        document_id=document_id,
+        status=DocumentStatus.ERROR
+        # Note: We don't know the counts here, so don't provide them
+    )
+    if not updated_doc:
+        logger.error(f"Failed to update document status to ERROR during reset for {document_id}.")
+        # Proceed to try and update result anyway, but log this issue
+
+    # --- Update Result Status --- 
+    if result:
+        logger.info(f"Resetting result {result.id} status to ERROR.")
+        updated_result = await crud.update_result(
+            result_id=result.id,
+            update_data={"status": ResultStatus.ERROR}
+        )
+        if not updated_result:
+            logger.error(f"Failed to update result status to ERROR during reset for {result.id} (doc: {document_id}).")
+            # If document update succeeded but result failed, raise error
+            if updated_doc: 
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fully reset result status.")
+            # If both failed, let the final error handle it
+    else:
+        logger.warning(f"No result record found to reset for document {document_id}. Document status may have been reset.")
+
+    # If either update failed earlier, this might not be reached if an exception was raised
+    if not updated_doc and not result: # If doc failed and no result found
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to reset document status (no result found)." )
+    elif not updated_doc and result and not updated_result: # If both failed
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to reset both document and result status.")
+
+    logger.info(f"Successfully reset status for document {document_id} and associated result (if found).")
+    return {"message": f"Successfully reset status for document {document_id} to ERROR."}
+
+@router.post(
+    "/{document_id}/cancel",
+    status_code=status.HTTP_200_OK,
+    summary="Cancel a stuck document assessment (Protected)",
+    description="Sets the status of a document (if PROCESSING) and its associated result (if ASSESSING) back to ERROR. Functionally similar to reset, provides a cancel semantic.",
+    response_model=Dict[str, str] # Simple confirmation message
+)
+async def cancel_assessment_status(
+    document_id: uuid.UUID,
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    user_kinde_id = current_user_payload.get("sub")
+    if not user_kinde_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+
+    logger.info(f"User {user_kinde_id} attempting to CANCEL status for document {document_id}")
+
+    # --- Get Document and Result (Check Ownership) ---
+    # Fetch document, including deleted=True just in case it was soft-deleted during processing
+    document = await crud.get_document_by_id(document_id=document_id, teacher_id=user_kinde_id, include_deleted=True)
+    if not document:
+        logger.warning(f"Cancel attempt failed: Document {document_id} not found or not owned by user {user_kinde_id}.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found or access denied.")
+
+    # --- Check if Cancellable --- 
+    # Only allow cancellation if it's actually in a processing state
+    if document.status not in [DocumentStatus.PROCESSING]: # Only allow cancelling PROCESSING doc status
+         logger.warning(f"Document {document_id} is not in PROCESSING state (currently {document.status}). Cannot cancel.")
+         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Cannot cancel assessment. Document status is {document.status}.")
+
+    result = await crud.get_result_by_document_id(document_id=document_id, include_deleted=True)
+
+    # --- Update Document Status to ERROR ---    
+    logger.info(f"Cancelling document {document_id} by setting status to ERROR.")
+    updated_doc = await crud.update_document_status(
+        document_id=document_id,
+        status=DocumentStatus.ERROR
+    )
+    if not updated_doc:
+        logger.error(f"Failed to update document status to ERROR during cancel for {document_id}.")
+        # Proceed to try and update result anyway, but log this issue
+
+    # --- Update Result Status to ERROR (if applicable) --- 
+    updated_result = None # Initialize to track if update was attempted and failed
+    result_updated_or_skipped = False # Track if update succeeded OR was skipped correctly
+
+    if result:
+         # Only try to update result if it's currently ASSESSING
+        if result.status == ResultStatus.ASSESSING:
+            logger.info(f"Cancelling result {result.id} by setting status to ERROR.")
+            updated_result = await crud.update_result(
+                result_id=result.id,
+                update_data={"status": ResultStatus.ERROR}
+            )
+            if not updated_result:
+                logger.error(f"Failed to update result status to ERROR during cancel for {result.id} (doc: {document_id}).")
+                # If document update succeeded but result failed, raise error now
+                if updated_doc: 
+                    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fully cancel result status after updating document.")
+                result_updated_or_skipped = False # Mark as failed
+            else:
+                 result_updated_or_skipped = True # Mark as succeeded
+        else:
+            logger.info(f"Result {result.id} status is {result.status} (not ASSESSING). Not changing result status during cancel.")
+            result_updated_or_skipped = True # Mark as skipped correctly
+    else:
+        logger.warning(f"No result record found to cancel for document {document_id}. Document status may have been set to ERROR.")
+        result_updated_or_skipped = True # Treat as success since there was no result to update
+
+    # --- Final Check & Response --- 
+    # Raise error if document update failed AND result update/skip failed
+    if not updated_doc and not result_updated_or_skipped: 
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to cancel document and result status.")
+    # Raise error if only document update failed (and result was ok/skipped)
+    elif not updated_doc: 
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to cancel document status.")
+    # If result update failed after doc succeeded, exception was already raised inside the block
+
+    logger.info(f"Successfully cancelled assessment processing for document {document_id} (set status to ERROR).")
+    return {"message": f"Successfully cancelled assessment for document {document_id}. Status set to ERROR."}
 
