@@ -15,6 +15,7 @@ class TeacherBase(BaseModel):
     # Using simple string for school name as decided
     school_name: Optional[str] = Field(None, min_length=1, max_length=200, description="Name of the school the teacher belongs to")
     role: TeacherRole = Field(default=TeacherRole.TEACHER, description="The primary role of the teacher/user")
+    is_administrator: bool = Field(default=False, description="Flag indicating if the user has administrative privileges")
     how_did_you_hear: Optional[MarketingSource] = None
     description: Optional[str] = Field(None, description="Optional bio or description")
     country: Optional[str] = Field(None, description="Country of the teacher/school")
@@ -94,6 +95,7 @@ class TeacherUpdate(BaseModel):
     # email: Optional[EmailStr] = None # Email usually not updatable
     school_name: Optional[str] = Field(None, min_length=1, max_length=200)
     role: Optional[TeacherRole] = None
+    is_administrator: Optional[bool] = Field(None, description="Set administrative privileges")
     description: Optional[str] = Field(None)
     country: Optional[str] = Field(None)
     state_county: Optional[str] = Field(None)
