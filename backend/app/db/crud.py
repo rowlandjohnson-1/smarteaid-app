@@ -1190,34 +1190,51 @@ async def get_score_distribution(current_user_payload: Dict[str, Any]) -> Dict[s
                     "score": {"$ne": None} # Exclude documents without a score
                 }
             },
+            # --- START REPLACEMENT: Use $facet instead of $bucket ---
             {
-                "$bucket": {
-                    "groupBy": "$score",
-                    "boundaries": [0, 0.2, 0.4, 0.6, 0.8, 1.01], # Boundaries for 0-20, 21-40, etc.
-                    "default": "Other", # Optional: Catch scores outside boundaries
-                    "output": {
-                        "count": {"$sum": 1}
-                    }
+                "$facet": {
+                    "0-20": [
+                        { "$match": { "score": { "$gte": 0, "$lte": 0.2 } } },
+                        { "$count": "count" }
+                    ],
+                    "21-40": [
+                        { "$match": { "score": { "$gt": 0.2, "$lte": 0.4 } } },
+                        { "$count": "count" }
+                    ],
+                    "41-60": [
+                        { "$match": { "score": { "$gt": 0.4, "$lte": 0.6 } } },
+                        { "$count": "count" }
+                    ],
+                    "61-80": [
+                        { "$match": { "score": { "$gt": 0.6, "$lte": 0.8 } } },
+                        { "$count": "count" }
+                    ],
+                    "81-100": [
+                        { "$match": { "score": { "$gt": 0.8, "$lte": 1.0 } } }, # Adjusted range slightly for edge cases
+                        { "$count": "count" }
+                    ]
                 }
             },
+            # Reshape the $facet output to the desired format [{range: "...", count: ...}]
             {
                 "$project": {
-                    "_id": 0, # Exclude the default _id (boundary lower limit)
-                    "range": {
-                        "$switch": {
-                            "branches": [
-                                {"case": {"$eq": ["$_id", 0]}, "then": "0-20"},
-                                {"case": {"$eq": ["$_id", 0.2]}, "then": "21-40"},
-                                {"case": {"$eq": ["$_id", 0.4]}, "then": "41-60"},
-                                {"case": {"$eq": ["$_id", 0.6]}, "then": "61-80"},
-                                {"case": {"$eq": ["$_id", 0.8]}, "then": "81-100"}
-                            ],
-                            "default": "Other"
-                        }
-                    },
-                    "count": "$count"
+                    "distribution": [
+                        { "range": "0-20", "count": { "$ifNull": [ { "$arrayElemAt": ["$0-20.count", 0] }, 0 ] } },
+                        { "range": "21-40", "count": { "$ifNull": [ { "$arrayElemAt": ["$21-40.count", 0] }, 0 ] } },
+                        { "range": "41-60", "count": { "$ifNull": [ { "$arrayElemAt": ["$41-60.count", 0] }, 0 ] } },
+                        { "range": "61-80", "count": { "$ifNull": [ { "$arrayElemAt": ["$61-80.count", 0] }, 0 ] } },
+                        { "range": "81-100", "count": { "$ifNull": [ { "$arrayElemAt": ["$81-100.count", 0] }, 0 ] } }
+                    ]
                 }
+            },
+            # Extract the distribution array from the single document result
+            {
+                "$unwind": "$distribution"
+            },
+            {
+                "$replaceRoot": { "newRoot": "$distribution" }
             }
+            # --- END REPLACEMENT ---
         ]
 
         # +++ ADDED Logging +++
@@ -1231,17 +1248,14 @@ async def get_score_distribution(current_user_payload: Dict[str, Any]) -> Dict[s
         # --- END Logging ---
 
         # 4. Format results, ensuring all ranges are present
-        distribution_map = {item['range']: item['count'] for item in aggregation_result if item['range'] != 'Other'}
-        default_ranges = [
+        # The new pipeline directly outputs the desired format, so mapping is simplified
+        # If the aggregation returns nothing (e.g., no results found), aggregation_result will be empty
+        final_distribution = aggregation_result if aggregation_result else [
             {"range": "0-20", "count": 0},
             {"range": "21-40", "count": 0},
             {"range": "41-60", "count": 0},
             {"range": "61-80", "count": 0},
             {"range": "81-100", "count": 0}
-        ]
-        final_distribution = [
-            {"range": item['range'], "count": distribution_map.get(item['range'], 0)}
-            for item in default_ranges
         ]
 
         # +++ ADDED Logging +++
