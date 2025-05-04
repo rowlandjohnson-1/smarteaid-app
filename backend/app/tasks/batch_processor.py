@@ -149,9 +149,9 @@ class BatchProcessor:
             )
 
             # Update result status
-            await crud.update_result_status(
-                document_id=document.id,
-                status=ResultStatus.COMPLETED
+            await crud.update_result(
+                result_id=document.id,
+                update_data={"status": ResultStatus.COMPLETED.value}
             )
 
             return True
@@ -164,9 +164,9 @@ class BatchProcessor:
                 status=DocumentStatus.ERROR
             )
             # Update result status
-            await crud.update_result_status(
-                document_id=document.id,
-                status=ResultStatus.ERROR
+            await crud.update_result(
+                result_id=document.id,
+                update_data={"status": ResultStatus.ERROR.value}
             )
             return False
 

@@ -9,45 +9,33 @@ const fetchDashboardData = useCallback(async () => {
   setError(null);
   
   try {
-    const fetchOptions = await createFetchOptions(getToken);
-    console.log('Fetching dashboard data with options:', {
-      ...fetchOptions,
-      headers: Object.fromEntries(Object.entries(fetchOptions.headers))
-    });
+    const token = await getToken();
+    if (!token) throw new Error(t('messages_error_authTokenMissing'));
 
-    // Fetch all data concurrently with proper error handling
-    const [statsData, distributionData, recentDocsData] = await Promise.all([
-      fetch(API_ENDPOINTS.dashboard.stats, fetchOptions)
-        .then(handleApiResponse)
-        .catch(err => {
-          console.error('Stats fetch failed:', err);
-          throw err;
-        }),
-      fetch(API_ENDPOINTS.dashboard.scoreDistribution, fetchOptions)
-        .then(handleApiResponse)
-        .catch(err => {
-          console.error('Distribution fetch failed:', err);
-          throw err;
-        }),
-      fetch(API_ENDPOINTS.documents.recent(), fetchOptions)
-        .then(handleApiResponse)
-        .catch(err => {
-          console.error('Recent documents fetch failed:', err);
-          throw err;
-        })
+    // Fetch all data in parallel - CORRECTED ENDPOINTS
+    const [statsResponse, distributionResponse, recentDocsResponse] = await Promise.all([
+      fetch('/api/v1/dashboard/stats', { // CORRECTED PATH
+        headers: { 'Authorization': `Bearer ${token}` }
+      }),
+      fetch('/api/v1/dashboard/score-distribution', { // CORRECTED PATH
+        headers: { 'Authorization': `Bearer ${token}` }
+      }),
+      fetch('/api/v1/dashboard/recent', { // CORRECTED PATH
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
     ]);
 
     // Log successful responses
     console.log('Dashboard data fetched successfully:', {
-      stats: statsData,
-      distribution: distributionData,
-      recentDocs: recentDocsData
+      stats: statsResponse,
+      distribution: distributionResponse,
+      recentDocs: recentDocsResponse
     });
 
     // Update state with fetched data
-    setKeyStats(statsData);
-    setChartData(distributionData);
-    setRecentAssessments(recentDocsData);
+    setKeyStats(statsResponse);
+    setChartData(distributionResponse);
+    setRecentAssessments(recentDocsResponse);
 
   } catch (err) {
     console.error("Dashboard: Error fetching data:", {

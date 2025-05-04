@@ -40,26 +40,22 @@ async def create_new_student(
     Protected endpoint to create a new student.
     - **student_in**: Student data based on the StudentCreate model.
     """
-    user_kinde_id = current_user_payload.get("sub") # Get user ID from token payload
+    user_kinde_id = current_user_payload.get("sub")
+    if not user_kinde_id:
+        logger.warning("Attempted to create student without Kinde ID in token payload.")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
+
     logger.info(f"User {user_kinde_id} attempting to create student: {student_in.first_name} {student_in.last_name}")
     # TODO: Add authorization check - does this user (teacher/admin) have permission to add students?
     # (e.g., are they adding to a class/school they manage?)
 
-    created_student = await crud.create_student(student_in=student_in)
-    if not created_student:
-        # Check if the failure might be due to duplicate external_student_id
-        if student_in.external_student_id:
-             raise HTTPException(
-                 status_code=status.HTTP_409_CONFLICT,
-                 detail=f"Student with external_student_id '{student_in.external_student_id}' may already exist."
-             )
-        else:
-            # Otherwise, assume a general server error during creation
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail="Could not create the student record due to an internal error."
-             )
-    logger.info(f"Student '{created_student.first_name} {created_student.last_name}' (Internal ID: {created_student.id}) created successfully by user {user_kinde_id}.")
+    created_student = await crud.create_student(student_in=student_in, teacher_id=user_kinde_id)
+    if created_student is None:
+        logger.error(f"Failed to create student in DB for teacher {user_kinde_id}.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create student")
+
+    logger.info(f"Student created successfully: {created_student.id} for teacher {user_kinde_id}")
+    # Return the full Student model (which includes the id)
     return created_student
 
 @router.get(

@@ -17,6 +17,7 @@ class DocumentBase(BaseModel):
     status: DocumentStatus = Field(default=DocumentStatus.UPLOADED, description="Processing status of the document")
     student_id: uuid.UUID = Field(..., description="ID of the student associated with this document")
     assignment_id: uuid.UUID = Field(..., description="ID of the assignment associated with this document")
+    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this document")
 
     # Batch processing fields
     batch_id: Optional[uuid.UUID] = Field(default=None, description="ID of the batch this document belongs to")
@@ -55,7 +56,7 @@ class DocumentInDBBase(DocumentBase):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # --- RBAC Changes Below ---
-    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this document") # ADDED
+    # teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this document") # MOVED to Base
     # Replaced deleted_at with is_deleted for consistency
     # deleted_at: Optional[datetime] = Field(default=None) # REMOVED
     is_deleted: bool = Field(default=False, description="Flag for soft delete status") # ADDED

@@ -156,6 +156,11 @@ app.include_router(documents.router, prefix=API_V1_PREFIX) # Includes documents 
 app.include_router(results.router, prefix=API_V1_PREFIX)   # Includes results router
 app.include_router(dashboard.router, prefix=API_V1_PREFIX) # NEW: Include dashboard router
 
+# Add a simple health check endpoint directly to the app
+@app.get("/api/v1/test-health")
+def read_root():
+    return {"Status": "OK"}
+
 # --- TODOs & Future Enhancements ---
 # TODO: Add middleware, CORS configuration, and global exception handlers
 # from fastapi.middleware.cors import CORSMiddleware

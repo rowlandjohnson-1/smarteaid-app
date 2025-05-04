@@ -13,6 +13,11 @@ import re
 from contextlib import asynccontextmanager
 from functools import wraps
 import asyncio
+from pydantic import ValidationError
+# FIX: Import ResourceNotFoundError from azure.core.exceptions
+from azure.core.exceptions import ResourceNotFoundError 
+from azure.storage.blob import BlobServiceClient
+import os
 
 # --- Database Access ---
 from .database import get_database
@@ -257,20 +262,46 @@ async def create_teacher(
     else:
         logger.error(f"Insert teacher not acknowledged: internal ID {internal_id}"); return None
 
-async def get_teacher_by_kinde_id(kinde_id: str, include_deleted: bool = False, session=None) -> Optional[Teacher]:
-    """Retrieves a teacher profile using their Kinde ID."""
-    collection = _get_collection(TEACHER_COLLECTION);
+async def get_teacher_by_id(teacher_id: str, session=None) -> Optional[Teacher]:
+    """Get a single teacher by their internal ID (string UUID)."""
+    collection = _get_collection(TEACHER_COLLECTION)
+    if collection is None: return None
+    logger.info(f"Getting teacher by internal ID: {teacher_id}")
+    try:
+        # Ensure ID is searched as string
+        teacher_doc = await collection.find_one({"_id": teacher_id}, session=session)
+        if teacher_doc:
+            # Convert _id to string BEFORE Pydantic validation if it's a UUID
+            if isinstance(teacher_doc.get("_id"), uuid.UUID):
+                teacher_doc["_id"] = str(teacher_doc["_id"])
+            return Teacher(**teacher_doc)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting teacher by ID: {e}", exc_info=True)
+        return None
+
+async def get_teacher_by_kinde_id(kinde_id: str, session=None) -> Optional[Teacher]:
+    """Get a single teacher by their Kinde ID."""
+    collection = _get_collection(TEACHER_COLLECTION)
     if collection is None: return None
     logger.info(f"Getting teacher by kinde_id: {kinde_id}")
-    query = {"kinde_id": kinde_id}; query.update(soft_delete_filter(include_deleted))
     try:
-        teacher_doc = await collection.find_one(query, session=session)
+        teacher_doc = await collection.find_one({"kinde_id": kinde_id}, session=session)
         if teacher_doc:
+            # Convert _id to string BEFORE Pydantic validation if it's a UUID
+            if isinstance(teacher_doc.get("_id"), uuid.UUID):
+                logger.debug(f"Found teacher with UUID _id {teacher_doc['_id']} for Kinde ID {kinde_id}. Converting to string for Pydantic.")
+                teacher_doc["_id"] = str(teacher_doc["_id"])
             return Teacher(**teacher_doc)
-        else:
-            logger.warning(f"Teacher with Kinde ID {kinde_id} not found."); return None
+        return None
+    # Keep specific ValidationError catch if desired, but broaden general Exception catch
+    except ValidationError as e: # Catch Pydantic validation specifically if needed
+        logger.error(f"Pydantic validation error getting teacher by Kinde ID {kinde_id}: {e}", exc_info=False) # exc_info=False for cleaner logs maybe
+        return None # Return None on validation failure as before
     except Exception as e:
-        logger.error(f"Error getting teacher by Kinde ID: {e}", exc_info=True); return None
+        # Catch any other potential errors (DB connection, etc.)
+        logger.error(f"General error getting teacher by Kinde ID {kinde_id}: {e}", exc_info=True)
+        return None
 
 async def get_all_teachers(skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Teacher]:
     collection = _get_collection(TEACHER_COLLECTION); teachers_list: List[Teacher] = []
@@ -310,7 +341,7 @@ async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None)
     if not update_data:
         logger.warning(f"No valid update data provided for teacher with Kinde ID {kinde_id}")
         # Fetch without session if called outside transaction
-        return await get_teacher_by_kinde_id(kinde_id=kinde_id, include_deleted=False, session=session)
+        return await get_teacher_by_kinde_id(kinde_id=kinde_id, session=session)
 
     update_data["updated_at"] = now
     logger.info(f"Updating teacher with Kinde ID {kinde_id} with data: {update_data}")
@@ -326,6 +357,12 @@ async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None)
         )
 
         if updated_doc:
+            # *** ADD CONVERSION HERE ***
+            # Convert _id to string BEFORE Pydantic validation if it's a UUID
+            if isinstance(updated_doc.get("_id"), uuid.UUID):
+                logger.debug(f"Converting updated_doc _id {updated_doc['_id']} to string for Pydantic.")
+                updated_doc["_id"] = str(updated_doc["_id"])
+            # *** END CONVERSION ***
             return Teacher(**updated_doc)
         else:
             logger.warning(f"Teacher with Kinde ID {kinde_id} not found or already deleted during update attempt.")
@@ -551,29 +588,48 @@ async def remove_student_from_class_group(
 
 # --- Student CRUD Functions (Keep existing) ---
 @with_transaction
-async def create_student(student_in: StudentCreate, session=None) -> Optional[Student]:
-    collection = _get_collection(STUDENT_COLLECTION); now = datetime.now(timezone.utc)
-    if collection is None: return None
-    internal_id = uuid.uuid4()
-    student_doc = student_in.model_dump()
-    student_doc["_id"] = internal_id # Use _id for DB
+async def create_student(student_in: StudentCreate, teacher_id: str, session=None) -> Optional[Student]:
+    """
+    Creates a new student record in the database.
+
+    Args:
+        student_in: Pydantic model containing student data to create.
+        teacher_id: The Kinde ID of the teacher creating the student. # Add teacher_id docstring
+        session: Optional Motor session for transaction management.
+
+    Returns:
+        The created Student object or None if creation failed.
+    """
+    collection = _get_collection(STUDENT_COLLECTION)
+    now = datetime.now(timezone.utc)
+    if collection is None:
+        return None
+
+    new_student_id = uuid.uuid4()
+    # Dump the Pydantic model, explicitly including 'teacher_id' if it's added to StudentCreate
+    # If teacher_id is NOT part of StudentCreate yet, it needs to be added here.
+    student_doc = student_in.model_dump(exclude_unset=True) # Using exclude_unset might be safer
+    student_doc["_id"] = new_student_id
+    student_doc["teacher_id"] = teacher_id # Add teacher_id to the document
     student_doc["created_at"] = now
     student_doc["updated_at"] = now
     student_doc["deleted_at"] = None
-    if student_doc.get("external_student_id") == "": student_doc["external_student_id"] = None
-    logger.info(f"Inserting student: {student_doc['_id']}")
+    # We might need to explicitly add teacher_id here if it's not in student_in
+    # Example: student_doc["teacher_id"] = teacher_id_passed_to_function
+
+    logger.info(f"Attempting to insert student with internal ID: {new_student_id} for teacher: {teacher_id}") # Update log
     try:
         inserted_result = await collection.insert_one(student_doc, session=session)
         if inserted_result.acknowledged:
-            created_doc = await collection.find_one({"_id": internal_id}, session=session)
+            created_doc = await collection.find_one({"_id": new_student_id}, session=session)
             if created_doc:
                 mapped_data = {**created_doc}
                 if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
                 return Student(**mapped_data)
             else:
-                logger.error(f"Failed retrieve student post-insert: {internal_id}"); return None
+                logger.error(f"Failed retrieve student post-insert: {new_student_id}"); return None
         else:
-            logger.error(f"Insert student not acknowledged: {internal_id}"); return None
+            logger.error(f"Insert student not acknowledged: {new_student_id}"); return None
     except DuplicateKeyError:
         ext_id = student_doc.get('external_student_id')
         logger.warning(f"Duplicate external_student_id: '{ext_id}' on create.")
@@ -750,7 +806,11 @@ async def create_document(document_in: DocumentCreate, session=None) -> Optional
     now = datetime.now(timezone.utc); doc_dict = document_in.model_dump()
     if isinstance(doc_dict.get("status"), DocumentStatus): doc_dict["status"] = doc_dict["status"].value
     if isinstance(doc_dict.get("file_type"), FileType): doc_dict["file_type"] = doc_dict["file_type"].value
-    doc = doc_dict; doc["_id"] = document_id; doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
+    doc = doc_dict
+    # Explicitly add teacher_id from the input model
+    if hasattr(document_in, 'teacher_id') and document_in.teacher_id:
+        doc["teacher_id"] = document_in.teacher_id
+    doc["_id"] = document_id; doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
     logger.info(f"Inserting document metadata: {doc['_id']}")
     try:
         inserted_result = await collection.insert_one(doc, session=session)
@@ -831,19 +891,25 @@ async def update_document_status(document_id: uuid.UUID, status: DocumentStatus,
     except Exception as e: logger.error(f"Error updating document status for ID {document_id}: {e}", exc_info=True); return None
 
 @with_transaction
-async def delete_document(document_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
-    collection = _get_collection(DOCUMENT_COLLECTION)
-    if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting document metadata {document_id}")
-    count = 0
+async def delete_document(document_id: uuid.UUID, session=None) -> bool:
+    """
+    Delete a document from the database.
+    
+    Args:
+        document_id: UUID of the document to delete
+        session: Optional database session
+        
+    Returns:
+        bool: True if document was deleted, False otherwise
+    """
     try:
-        if hard_delete: result = await collection.delete_one({"_id": document_id}, session=session); count = result.deleted_count # Query by _id
-        else:
-            now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": document_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
-    except Exception as e: logger.error(f"Error deleting document metadata: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Document metadata {document_id} not found or already deleted."); return False
+        collection = _get_collection(DOCUMENT_COLLECTION) # FIX: Use _get_collection
+        if collection is None: return False # Add check if collection retrieval failed
+        result = await collection.delete_one({"_id": document_id})
+        return result.deleted_count > 0
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {e}")
+        return False
 
 # --- Result CRUD Functions (Keep existing) ---
 # @with_transaction # Keep transaction commented out if needed
@@ -853,7 +919,11 @@ async def create_result(result_in: ResultCreate, session=None) -> Optional[Resul
     result_id = uuid.uuid4()
     now = datetime.now(timezone.utc); result_dict = result_in.model_dump()
     if isinstance(result_dict.get("status"), ResultStatus): result_dict["status"] = result_dict["status"].value
-    result_doc = result_dict; result_doc["_id"] = result_id; result_doc["created_at"] = now; result_doc["updated_at"] = now; result_doc["deleted_at"] = None
+    result_doc = result_dict
+    # Explicitly add teacher_id from the input model
+    if hasattr(result_in, 'teacher_id') and result_in.teacher_id:
+        result_doc["teacher_id"] = result_in.teacher_id
+    result_doc["_id"] = result_id; result_doc["created_at"] = now; result_doc["updated_at"] = now; result_doc["deleted_at"] = None
     logger.info(f"Inserting result for document: {result_doc['document_id']}")
     try:
         inserted_result = await collection.insert_one(result_doc, session=session)
@@ -989,218 +1059,262 @@ async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: boo
         return None
 # --- End optional logging ---
 
-# --- NEW Dashboard CRUD Functions ---
+# === Dashboard CRUD Functions ===
 
-async def get_dashboard_stats(
-    # Add parameters if stats need filtering, e.g., teacher_id, school_id
-    session=None
-) -> Dict[str, Any]:
-    """Calculates various statistics for the dashboard."""
-    doc_collection = _get_collection(DOCUMENT_COLLECTION)
-    result_collection = _get_collection(RESULT_COLLECTION)
-    stats = {
-        "totalAssessed": 0,
-        "avgScore": None,
-        "flaggedRecent": 0,
-        "pending": 0
-    }
-    if doc_collection is None or result_collection is None:
-        logger.error("Cannot get dashboard stats: Collection(s) not available.")
-        return stats # Return default empty stats
+async def get_dashboard_stats(current_user_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate dashboard statistics for the given teacher based on Kinde payload.
+    Finds the internal teacher ID first.
+    """
+    teacher_kinde_id = current_user_payload.get("sub")
+    if not teacher_kinde_id:
+        logger.warning("get_dashboard_stats called without teacher Kinde ID (sub) in payload.")
+        return {'totalDocs': 0, 'avgScore': None, 'flaggedRecent': 0, 'pending': 0}
 
-    logger.info("Calculating dashboard stats...")
+    # +++ ADDED Logging +++
+    logger.info(f"Calculating dashboard stats for teacher kinde_id: {teacher_kinde_id}")
+    # --- END Logging ---
+
     try:
-        # 1. Total Assessed (Count completed documents/results)
-        total_assessed_filter = {
-            "status": ResultStatus.COMPLETED.value,
-            "deleted_at": None
-        }
-        stats["totalAssessed"] = await result_collection.count_documents(total_assessed_filter, session=session)
+        # 1. Find the internal teacher ObjectId using the Kinde ID
+        teacher = await get_teacher_by_kinde_id(teacher_kinde_id)
+        if not teacher:
+             # +++ ADDED Logging +++
+            logger.warning(f"No teacher found in DB for kinde_id: {teacher_kinde_id}")
+             # --- END Logging ---
+            return {'totalDocs': 0, 'avgScore': None, 'flaggedRecent': 0, 'pending': 0}
 
-        # 2. Average Score (Aggregation on completed results)
+        teacher_internal_id = teacher.id # This is the internal UUID
+        # +++ ADDED Logging +++
+        logger.debug(f"Found internal teacher id: {teacher_internal_id} for kinde_id: {teacher_kinde_id}")
+        # --- END Logging ---
+
+        # 2. Get Collections
+        docs_collection = _get_collection(DOCUMENT_COLLECTION)
+        results_collection = _get_collection(RESULT_COLLECTION)
+        # FIX: Explicitly check against None
+        if docs_collection is None or results_collection is None:
+            logger.error("Could not get documents or results collection for dashboard stats.")
+            return {'totalDocs': 0, 'avgScore': None, 'flaggedRecent': 0, 'pending': 0}
+
+        # 3. Perform Aggregations (using the internal teacher_internal_id)
+        # Total Documents
+        total_docs = await docs_collection.count_documents({"teacher_id": teacher_kinde_id})
+        logger.debug(f"[Stats] Total docs query found: {total_docs}")
+
+        # Average Score (from Results where status is COMPLETED)
+        # Note: We use teacher_kinde_id here as it's on the result record directly
         avg_score_pipeline = [
-            {
-                "$match": {
-                    "status": ResultStatus.COMPLETED.value,
-                    "score": {"$ne": None},
-                    "deleted_at": None
-                }
-            },
-            {"$group": {"_id": None, "averageScore": {"$avg": "$score"}}}
+            {"$match": {"teacher_id": teacher_kinde_id, "status": ResultStatus.COMPLETED.value, "score": {"$ne": None}}},
+            {"$group": {"_id": None, "avgScore": {"$avg": "$score"}}}
         ]
-        avg_cursor = result_collection.aggregate(avg_score_pipeline, session=session)
-        avg_result = await avg_cursor.to_list(length=1)
-        if avg_result and "averageScore" in avg_result[0]:
-            stats["avgScore"] = avg_result[0]["averageScore"]
+        avg_score_result = await results_collection.aggregate(avg_score_pipeline).to_list(length=1)
+        avg_score = avg_score_result[0]['avgScore'] if avg_score_result else None
+        logger.debug(f"[Stats] Avg score query result: {avg_score}")
 
-        # 3. Flagged Recently (Count results flagged as AI in last 7 days)
-        time_threshold = datetime.now(timezone.utc) - timedelta(days=7)
-        flagged_filter = {
-            "ai_generated": True,
-            "result_timestamp": {"$gte": time_threshold},
-            "deleted_at": None
+        # Flagged Recently (Documents with score >= 0.8 in last 7 days)
+        # Requires joining Documents and Results or querying Results directly
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        flagged_recent_pipeline = [
+            {"$match": {
+                "teacher_id": teacher_kinde_id,
+                "status": ResultStatus.COMPLETED.value,
+                "score": {"$gte": 0.8},
+                "updated_at": {"$gte": seven_days_ago}
+            }},
+            {"$count": "count"}
+        ]
+        flagged_recent_result = await results_collection.aggregate(flagged_recent_pipeline).to_list(length=1)
+        flagged_recent = flagged_recent_result[0]['count'] if flagged_recent_result else 0
+        logger.debug(f"[Stats] Flagged recent query result: {flagged_recent}")
+
+        # Pending/Processing Documents (based on Document status)
+        pending_statuses = [DocumentStatus.QUEUED.value, DocumentStatus.PROCESSING.value]
+        pending = await docs_collection.count_documents({"teacher_id": teacher_kinde_id, "status": {"$in": pending_statuses}})
+        logger.debug(f"[Stats] Pending query result: {pending}")
+
+        # 4. Assemble Results
+        stats = {
+            'totalDocs': total_docs,
+            'avgScore': avg_score,
+            'flaggedRecent': flagged_recent,
+            'pending': pending
         }
-        stats["flaggedRecent"] = await result_collection.count_documents(flagged_filter, session=session)
-
-        # 4. Pending/Processing (Count documents in relevant states)
-        pending_filter = {
-            "status": {"$in": [DocumentStatus.PROCESSING.value, DocumentStatus.QUEUED.value]},
-            "deleted_at": None
-        }
-        stats["pending"] = await doc_collection.count_documents(pending_filter, session=session)
-
-        logger.info(f"Dashboard stats calculated: {stats}")
+        # +++ ADDED Logging +++
+        logger.info(f"Dashboard stats calculated for teacher {teacher_kinde_id}: {stats}")
+        # --- END Logging ---
         return stats
 
     except Exception as e:
-        logger.error(f"Error calculating dashboard stats: {e}", exc_info=True)
-        return stats # Return default/partially calculated stats on error
+        logger.error(f"Error calculating dashboard stats for teacher {teacher_kinde_id}: {str(e)}", exc_info=True)
+        # Return default/empty stats on error to prevent frontend crash
+        return {'totalDocs': 0, 'avgScore': None, 'flaggedRecent': 0, 'pending': 0}
 
+async def get_score_distribution(current_user_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate the distribution of document scores for the given teacher based on Kinde payload.
+    Finds the internal teacher ID first.
+    """
+    teacher_kinde_id = current_user_payload.get("sub")
+    if not teacher_kinde_id:
+        logger.warning("get_score_distribution called without teacher Kinde ID (sub) in payload.")
+        return {"distribution": []}
 
-async def get_score_distribution(
-    # Add parameters if distribution needs filtering, e.g., teacher_id, date range
-    session=None
-) -> Dict[str, Any]:
-    """
-    Calculate the distribution of AI scores across predefined ranges.
-    Returns a dictionary containing the distribution and total count.
-    """
-    collection = _get_collection(RESULT_COLLECTION)  # Changed to RESULT_COLLECTION
-    if collection is None:
-        logger.error("Failed to get results collection for score distribution")
-        return {"distribution": [], "total_documents": 0}
+    # +++ ADDED Logging +++
+    logger.info(f"Calculating score distribution for teacher kinde_id: {teacher_kinde_id}")
+    # --- END Logging ---
 
     try:
-        # Define the aggregation pipeline
+        # 1. Find the internal teacher ObjectId using the Kinde ID (Optional - could query results directly)
+        # teacher = await get_teacher_by_kinde_id(teacher_kinde_id)
+        # if not teacher:
+        #     logger.warning(f"No teacher found in DB for kinde_id: {teacher_kinde_id} for score distribution")
+        #     return {"distribution": []}
+        # teacher_internal_id = teacher.id
+        # logger.debug(f"Found internal teacher id: {teacher_internal_id} for score distribution calculation")
+
+        # 2. Get Results Collection
+        results_collection = _get_collection(RESULT_COLLECTION)
+        # FIX: Explicitly check against None
+        if results_collection is None:
+            logger.error("Could not get results collection for score distribution.")
+            return {"distribution": []}
+
+        # 3. Define Score Ranges and Aggregation Pipeline
+        # Use teacher_kinde_id as it exists on the result document
         pipeline = [
-            # First match only completed results with scores
             {
                 "$match": {
+                    "teacher_id": teacher_kinde_id,
                     "status": ResultStatus.COMPLETED.value,
-                    "score": {"$exists": True, "$ne": None},
-                    "deleted_at": None
+                    "score": {"$ne": None} # Exclude documents without a score
                 }
             },
-            
-            # Add normalized score field
             {
-                "$addFields": {
-                    "normalized_score": {
-                        "$cond": {
-                            "if": {"$lt": ["$score", 1]},
-                            "then": {"$multiply": ["$score", 100]},
-                            "else": "$score"
-                        }
+                "$bucket": {
+                    "groupBy": "$score",
+                    "boundaries": [0, 0.2, 0.4, 0.6, 0.8, 1.01], # Boundaries for 0-20, 21-40, etc.
+                    "default": "Other", # Optional: Catch scores outside boundaries
+                    "output": {
+                        "count": {"$sum": 1}
                     }
                 }
             },
-            
-            # Add score range field using the normalized score
-            {
-                "$addFields": {
-                    "score_range": {
-                        "$switch": {
-                            "branches": [
-                                {
-                                    "case": {
-                                        "$and": [
-                                            {"$gte": ["$normalized_score", 0]},
-                                            {"$lte": ["$normalized_score", 20]}
-                                        ]
-                                    },
-                                    "then": "0-20"
-                                },
-                                {
-                                    "case": {
-                                        "$and": [
-                                            {"$gte": ["$normalized_score", 21]},
-                                            {"$lte": ["$normalized_score", 40]}
-                                        ]
-                                    },
-                                    "then": "21-40"
-                                },
-                                {
-                                    "case": {
-                                        "$and": [
-                                            {"$gte": ["$normalized_score", 41]},
-                                            {"$lte": ["$normalized_score", 60]}
-                                        ]
-                                    },
-                                    "then": "41-60"
-                                },
-                                {
-                                    "case": {
-                                        "$and": [
-                                            {"$gte": ["$normalized_score", 61]},
-                                            {"$lte": ["$normalized_score", 80]}
-                                        ]
-                                    },
-                                    "then": "61-80"
-                                },
-                                {
-                                    "case": {
-                                        "$and": [
-                                            {"$gte": ["$normalized_score", 81]},
-                                            {"$lte": ["$normalized_score", 100]}
-                                        ]
-                                    },
-                                    "then": "81-100"
-                                }
-                            ],
-                            "default": "0-20"
-                        }
-                    }
-                }
-            },
-            
-            # Group by score range and count documents
-            {
-                "$group": {
-                    "_id": "$score_range",
-                    "count": {"$sum": 1}
-                }
-            },
-            
-            # Project to match expected format
             {
                 "$project": {
-                    "_id": 0,
-                    "range": "$_id",
-                    "count": 1
-                }
-            },
-            
-            # Sort by range
-            {
-                "$sort": {
-                    "range": 1
+                    "_id": 0, # Exclude the default _id (boundary lower limit)
+                    "range": {
+                        "$switch": {
+                            "branches": [
+                                {"case": {"$eq": ["$_id", 0]}, "then": "0-20"},
+                                {"case": {"$eq": ["$_id", 0.2]}, "then": "21-40"},
+                                {"case": {"$eq": ["$_id", 0.4]}, "then": "41-60"},
+                                {"case": {"$eq": ["$_id", 0.6]}, "then": "61-80"},
+                                {"case": {"$eq": ["$_id", 0.8]}, "then": "81-100"}
+                            ],
+                            "default": "Other"
+                        }
+                    },
+                    "count": "$count"
                 }
             }
         ]
 
-        # Execute the pipeline
-        results = []
-        async for doc in collection.aggregate(pipeline, session=session):
-            results.append(doc)
+        # +++ ADDED Logging +++
+        logger.debug(f"Score distribution pipeline for {teacher_kinde_id}: {pipeline}")
+        # --- END Logging ---
 
-        # Ensure all ranges are present with at least 0 count
-        ranges = ["0-20", "21-40", "41-60", "61-80", "81-100"]
-        distribution = {item["range"]: item["count"] for item in results}
-        final_distribution = [{"range": r, "count": distribution.get(r, 0)} for r in ranges]
+        aggregation_result = await results_collection.aggregate(pipeline).to_list(None)
 
-        # Calculate total documents
-        total_documents = sum(item["count"] for item in final_distribution)
+        # +++ ADDED Logging +++
+        logger.debug(f"Raw aggregation result for score distribution: {aggregation_result}")
+        # --- END Logging ---
 
-        return {
-            "distribution": final_distribution,
-            "total_documents": total_documents
-        }
+        # 4. Format results, ensuring all ranges are present
+        distribution_map = {item['range']: item['count'] for item in aggregation_result if item['range'] != 'Other'}
+        default_ranges = [
+            {"range": "0-20", "count": 0},
+            {"range": "21-40", "count": 0},
+            {"range": "41-60", "count": 0},
+            {"range": "61-80", "count": 0},
+            {"range": "81-100", "count": 0}
+        ]
+        final_distribution = [
+            {"range": item['range'], "count": distribution_map.get(item['range'], 0)}
+            for item in default_ranges
+        ]
+
+        # +++ ADDED Logging +++
+        logger.info(f"Final score distribution for teacher {teacher_kinde_id}: {final_distribution}")
+        # --- END Logging ---
+
+        return {"distribution": final_distribution}
 
     except Exception as e:
-        logger.error(f"Error calculating score distribution: {e}", exc_info=True)
-        return {"distribution": [], "total_documents": 0}
+        logger.error(f"Error calculating score distribution for teacher {teacher_kinde_id}: {str(e)}", exc_info=True)
+        return {"distribution": []} # Return empty on error
 
-# --- END NEW Dashboard CRUD Functions ---
+
+async def get_recent_documents(teacher_id: str, limit: int = 4) -> List[Document]:
+    """
+    Get the most recent documents for a teacher using their Kinde ID.
+    Args:
+        teacher_id: The teacher's Kinde ID string.
+        limit: Maximum number of documents to return.
+    Returns:
+        List of Document objects.
+    """
+    # +++ ADDED Logging +++
+    logger.info(f"Fetching recent documents for teacher_id: {teacher_id}, limit: {limit}")
+    # --- END Logging ---
+    try:
+        docs_collection = _get_collection(DOCUMENT_COLLECTION)
+        # FIX: Explicitly check against None
+        if docs_collection is None:
+            logger.error("Could not get documents collection for recent documents.")
+            return []
+
+        # Use the teacher_id (Kinde ID string) directly for filtering
+        # Ensure the index exists in Cosmos DB: { "teacher_id": 1, "upload_timestamp": -1 }
+        cursor = docs_collection.find(
+            {
+                "teacher_id": teacher_id
+            }
+        ).sort([("upload_timestamp", -1)]).limit(limit)
+
+        docs = await cursor.to_list(length=limit)
+
+        # +++ ADDED Logging +++
+        logger.debug(f"Found {len(docs)} raw documents for teacher {teacher_id}.")
+        # Example log of one document ID if found
+        if docs:
+            logger.debug(f"First raw doc example: {docs[0]}")
+        # --- END Logging ---
+
+        # Convert to Pydantic models
+        # Need to handle potential missing 'ai_score' which might be in the Results collection
+        # This currently only returns Document base fields. We might need results.
+        # TODO: Enhance this to fetch associated result/score if needed by frontend.
+        # For now, return Document model instances.
+        documents_list = []
+        for doc in docs:
+            try:
+                # Map Pydantic field names (like id) from DB field names (_id)
+                doc['id'] = doc.pop('_id', None)
+                documents_list.append(Document(**doc))
+            except ValidationError as ve:
+                logger.warning(f"Validation error converting document {doc.get('id', 'N/A')} to model: {ve}")
+            except Exception as model_ex:
+                 logger.error(f"Error converting document {doc.get('id', 'N/A')} to model: {model_ex}")
+
+        # +++ ADDED Logging +++
+        logger.info(f"Returning {len(documents_list)} Document objects for teacher {teacher_id}.")
+        # --- END Logging ---
+        return documents_list
+
+    except Exception as e:
+        logger.error(f"Error fetching recent documents for teacher {teacher_id}: {str(e)}", exc_info=True)
+        return []
 
 # --- Bulk Operations (Keep existing) ---
 @with_transaction
@@ -1480,5 +1594,73 @@ async def delete_batch(*, batch_id: uuid.UUID) -> bool:
         return False
     except Exception as e:
         logger.error(f"Error deleting batch {batch_id}: {e}")
+        return False
+
+async def delete_result(result_id: uuid.UUID, session=None) -> bool:
+    """
+    Delete a result from the database.
+    
+    Args:
+        result_id: UUID of the result to delete
+        session: Optional database session
+        
+    Returns:
+        bool: True if result was deleted, False otherwise
+    """
+    try:
+        collection = _get_collection(RESULT_COLLECTION) # FIX: Use _get_collection and correct constant
+        if collection is None: return False # Add check
+        result = await collection.delete_one({"_id": result_id})
+        return result.deleted_count > 0
+    except Exception as e:
+        logger.error(f"Error deleting result {result_id}: {e}")
+        return False
+
+async def delete_blob(blob_path: str) -> bool:
+    """
+    Delete a blob from storage.
+    
+    Args:
+        blob_path: Path of the blob to delete
+        
+    Returns:
+        bool: True if blob was deleted, False otherwise
+    """
+    try:
+        # FIX: Check environment variables first
+        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
+
+        if not connection_string or not container_name:
+            logger.error("Azure Storage connection string or container name not configured.")
+            return False
+
+        # Get blob service client
+        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+        
+        # Get blob name from path (assuming path might be just the name or full URL)
+        # This logic might need adjustment depending on how storage_blob_path is stored
+        if '/' in blob_path:
+            blob_name = blob_path.split("/")[-1]
+        else:
+            blob_name = blob_path # Assume it's just the name
+        
+        # Get blob client and delete
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name,
+            blob=blob_name
+        )
+        # FIX: Check if blob exists before deleting to avoid errors on retries/cleanup
+        if await blob_client.exists():
+            await blob_client.delete_blob()
+            logger.info(f"Successfully deleted blob {container_name}/{blob_name}")
+        else:
+            logger.warning(f"Blob {container_name}/{blob_name} not found, skipping deletion.")
+        return True
+    except ResourceNotFoundError:
+        logger.warning(f"Blob {container_name}/{blob_name} not found during deletion attempt.")
+        return True # Treat as success if blob is already gone
+    except Exception as e:
+        logger.error(f"Error deleting blob {blob_path}: {e}", exc_info=True) # Log traceback
         return False
  

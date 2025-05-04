@@ -44,9 +44,11 @@ ML_API_URL="https://fa-sdt-uks-aitextdet-prod.azurewebsites.net/api/ai-text-dete
 # ML_RECAPTCHA_SECRET="6LfAEWwqAAAAAKCk5TXLVa7L9tSY-850idoUwOgr" # Store securely if needed - currently unused
 # --- END TEMPORARY ---
 
-
 # Setup logger
 logger = logging.getLogger(__name__)
+
+# Add logging right at module import time
+logger.info("---- documents.py module loaded ----")
 
 # --- IMPORTANT: Define the router instance ---
 router = APIRouter(
@@ -125,7 +127,8 @@ async def upload_document(
         upload_timestamp=now,
         student_id=student_id,
         assignment_id=assignment_id,
-        status=DocumentStatus.UPLOADED # Correctly uses Enum
+        status=DocumentStatus.UPLOADED, # Correctly uses Enum
+        teacher_id=user_kinde_id # ADDED: Pass the teacher's Kinde ID
     )
     created_document = await crud.create_document(document_in=document_data)
     if not created_document:
@@ -135,7 +138,7 @@ async def upload_document(
 
     # 3. Create initial Result record
     result_data = ResultCreate(
-        score=None, status=ResultStatus.PENDING, result_timestamp=now, document_id=created_document.id
+        score=None, status=ResultStatus.PENDING, result_timestamp=now, document_id=created_document.id, teacher_id=user_kinde_id
         # paragraph_results will be None by default from the model
     )
     created_result = await crud.create_result(result_in=result_data)
@@ -346,7 +349,19 @@ async def trigger_assessment(
                      logger.error(f"ml_paragraph_results_raw is not a list of dicts for doc {document_id}. Skipping save.")
 
             # --- Call CRUD update function with the dictionary ---
+            # +++ ADDED: Log payload before update +++
+            logger.debug(f"Attempting to update result {result.id} with payload: {update_payload_dict}")
+            # +++ END ADDED +++
             final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict) # Pass dict
+            # +++ ADDED: Log final result content +++
+            if final_result:
+                 para_results_content = final_result.paragraph_results
+                 logger.debug(f"crud.update_result returned for {result.id}. paragraph_results type: {type(para_results_content)}, length: {len(para_results_content) if para_results_content else 0}")
+                 if para_results_content and isinstance(para_results_content, list) and len(para_results_content) > 0:
+                      logger.debug(f"First paragraph result item type: {type(para_results_content[0])}") # Check if it's a ParagraphResult object
+            else:
+                 logger.warning(f"crud.update_result returned None for {result.id}")
+            # +++ END ADDED +++
 
             if final_result:
                 await crud.update_document_status(document_id=document_id, status=DocumentStatus.COMPLETED)
@@ -548,19 +563,58 @@ async def update_document_processing_status(
     summary="Delete a document record (Protected)",
     description="Deletes a document metadata record. Requires authentication. Does NOT delete the file from Blob Storage."
 )
-async def delete_document_metadata(
+async def delete_document(
     document_id: uuid.UUID,
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
-    """Protected endpoint to delete document metadata."""
-    user_kinde_id = current_user_payload.get("sub")
-    logger.info(f"User {user_kinde_id} attempting to delete document metadata ID: {document_id}")
-    # TODO: Add authorization check: Who can delete document metadata?
-    # TODO: Consider triggering blob deletion (perhaps via background task)
-    deleted = await crud.delete_document(document_id=document_id) # Add hard_delete=True/False if needed
-    if not deleted: raise HTTPException(status.HTTP_404_NOT_FOUND, f"Document metadata {document_id} not found.")
-    logger.info(f"Document metadata {document_id} deleted by user {user_kinde_id}.")
-    return None # Return None for 204 response
+    """
+    Delete a document and its associated data.
+    
+    This endpoint:
+    1. Deletes the document from the database
+    2. Deletes the associated blob from storage
+    3. Deletes any associated results
+    
+    Args:
+        document_id: UUID of the document to delete
+        current_user_payload: Current authenticated user payload
+    
+    Raises:
+        HTTPException: If document not found or user not authorized
+    """
+    try:
+        # Get the document first to check ownership and get blob path
+        document = await crud.get_document_by_id(document_id=document_id)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+            
+        # Check if user owns the document
+        if document.teacher_id != current_user_payload.get("sub"):
+            raise HTTPException(status_code=403, detail="Not authorized to delete this document")
+            
+        # Delete the blob from storage
+        if document.storage_blob_path:
+            try:
+                await crud.delete_blob(document.storage_blob_path)
+            except Exception as e:
+                logger.error(f"Error deleting blob {document.storage_blob_path}: {e}")
+                # Continue with deletion even if blob deletion fails
+                
+        # Delete associated result if it exists
+        result = await crud.get_result_by_document_id(document_id=document_id)
+        if result:
+            await crud.delete_result(result_id=result.id)
+            
+        # Delete the document
+        success = await crud.delete_document(document_id=document_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete document")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post(
     "/batch",
@@ -585,7 +639,7 @@ async def upload_batch(
 
     # Create batch record
     batch_data = BatchCreate(
-        user_id=user_kinde_id,
+        teacher_id=user_kinde_id,
         total_files=len(files),
         status=BatchStatus.UPLOADING,
         priority=priority
@@ -660,7 +714,8 @@ async def upload_batch(
                 status=DocumentStatus.UPLOADED,
                 batch_id=batch.id,
                 queue_position=len(documents) + 1,
-                processing_priority=priority_value  # Use the converted integer value
+                processing_priority=priority_value,  # Use the converted integer value
+                teacher_id=user_kinde_id
             )
             
             document = await crud.create_document(document_in=document_data)
@@ -676,9 +731,16 @@ async def upload_batch(
                 score=None,
                 status=ResultStatus.PENDING,
                 result_timestamp=now,
-                document_id=document.id
+                document_id=document.id,
+                teacher_id=user_kinde_id
             )
-            await crud.create_result(result_in=result_data)
+            created_result = await crud.create_result(result_in=result_data)
+            # --- ADDED: Log result creation outcome ---
+            if created_result:
+                logger.info(f"Successfully created initial Result record {created_result.id} for Document {document.id}")
+            else:
+                logger.error(f"!!! Failed to create initial Result record for Document {document.id}. crud.create_result returned None.")
+            # --- END ADDED ---
             
             documents.append(document)
 

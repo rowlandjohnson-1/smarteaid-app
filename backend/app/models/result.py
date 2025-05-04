@@ -22,6 +22,7 @@ class ParagraphResult(BaseModel):
 class ResultBase(BaseModel):
     """Base model for Result data, including fields from the ML API."""
     document_id: uuid.UUID = Field(..., description="Link to the Document model this result belongs to")
+    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns the associated document")
 
     # Overall Score: We'll store the probability from the first paragraph result here
     # as the primary score, based on the API example.
@@ -68,7 +69,7 @@ class ResultInDBBase(ResultBase):
 
     # --- RBAC Changes Below ---
     # Add teacher_id, likely derived from the associated document upon creation
-    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns the associated document") # ADDED
+    # teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns the associated document") # MOVED to Base
     # Replace deleted_at with is_deleted for consistency
     # deleted_at: Optional[datetime] = Field(default=None) # REMOVED
     is_deleted: bool = Field(default=False, description="Flag for soft delete status (likely linked to document deletion)") # ADDED

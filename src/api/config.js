@@ -1,5 +1,5 @@
 // API configuration
-export const API_BASE_URL = 'http://localhost:8000'; // Update this for production
+export const API_BASE_URL = 'http://localhost:3000'; // Update this for production
 
 export const createAuthHeaders = async (getToken) => {
   const token = await getToken();
