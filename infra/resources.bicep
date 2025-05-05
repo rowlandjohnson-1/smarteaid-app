@@ -1,3 +1,5 @@
+// -------- infra/resources.bicep --------
+
 @description('Company prefix for resource names.')
 param companyPrefix string
 
@@ -13,12 +15,12 @@ param location string
 @description('Short location code for naming convention.')
 param locationShort string
 
-// --- Add Container App Config Parameters ---
+// --- Container App Config Parameters ---
 @description('Specifies the container image to deploy (e.g., myacr.azurecr.io/myapp:latest).')
 param containerImage string // Required: Pass this in from workflow (e.g., includes tag/SHA)
 
 @description('Specifies the CPU allocation for the container app.')
-param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
+param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5' // Kept as string based on previous logs
 
 @description('Specifies the memory allocation for the container app.')
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
@@ -29,7 +31,7 @@ param containerAppMinReplicas int = (environment == 'prod') ? 1 : 0
 @description('Maximum replicas for the container app.')
 param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
 
-// --- Add Secure Parameters for Secrets ---
+// --- Secure Parameters for Secrets ---
 @secure()
 @description('Required. Cosmos DB connection string.')
 param cosmosDbConnectionString string
@@ -49,25 +51,26 @@ param storageConnectionString string
 // --- Variables ---
 var uniqueSeed = uniqueString(subscription().subscriptionId)
 var shortUniqueSeed = take(uniqueSeed, 8)
-var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${environment}-${shortUniqueSeed}' // Adjusted naming slightly
+var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${environment}-${shortUniqueSeed}'
 var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${environment}${shortUniqueSeed}')
-var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Removed seed - often better without for consistency
+var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
-var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Name for the Container App itself
+var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 
-// ACR Name (assuming a naming convention)
-var acrName = toLower('acr${companyPrefix}${purpose}${environment}') 
-var acrLoginServer = '${acrName}.azurecr.io'
+// Construct ACR name and login server based on parameters
+// IMPORTANT: This assumes your manually created ACRs follow this exact naming pattern!
+var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // Example: acrsdtaidetectordev
+var acrLoginServer = '${acrName}.azurecr.io' // Example: acrsdtaidetectordev.azurecr.io
 
-// Define consistent secret names to be used in Key Vault and referenced by the app
+// Define consistent secret names
 var secretNameCosmosConnectionString = 'CosmosDbConnectionString'
 var secretNameKindeClientSecret = 'KindeClientSecret'
 var secretNameStripeSecretKey = 'StripeSecretKey'
 var secretNameStorageConnectionString = 'StorageConnectionString'
 
-// Role Definition ID for Key Vault Secrets User
+// Role Definition IDs
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-
+var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID
 
 // --- Resource Definitions ---
 
@@ -75,7 +78,7 @@ var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/ro
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
   location: location
-  tags: { // Add tags
+  tags: {
     environment: environment
     application: 'SmartEducator AI Detector'
     purpose: purpose
@@ -86,15 +89,12 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
       name: 'standard'
     }
     tenantId: subscription().tenantId
-    enableRbacAuthorization: true // RBAC is required for Managed Identity access
-    // Purge protection might prevent immediate deletion/recreation in dev, consider making it conditional
-    enablePurgeProtection: true
+    enableRbacAuthorization: true
+    enablePurgeProtection: true // Keep true per policy
     softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7
   }
 
-  // --- Add Secrets Directly to Key Vault ---
-  // Note: Bicep needs Microsoft.KeyVault/vaults/accessPolicies or RBAC assignments for itself to set secrets
-  // RBAC is preferred. Ensure the identity running the Bicep deployment has Key Vault Secrets Officer role on the KV or Subscription.
+  // --- Key Vault Secrets ---
   resource cosmosConnectionStringSecret 'secrets@2023-07-01' = {
     name: secretNameCosmosConnectionString
     properties: {
@@ -125,7 +125,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
 resource st 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
-  tags: { // Add tags
+  tags: {
     environment: environment
     application: 'SmartEducator AI Detector'
     purpose: purpose
@@ -146,13 +146,12 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   name: cosmosDbAccountName
   location: location
   kind: 'MongoDB'
-  tags: { // Add tags
+  tags: {
     environment: environment
     application: 'SmartEducator AI Detector'
     purpose: purpose
   }
   properties: {
-    // Consider making offer type conditional if cost is a concern for dev/stg
     databaseAccountOfferType: 'Standard'
     locations: [
       {
@@ -164,15 +163,13 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
       {
         name: 'EnableMongo'
       }
-      { // Use Serverless only if appropriate, otherwise remove this capability
+      {
         name: 'EnableServerless'
       }
     ]
     consistencyPolicy: {
       defaultConsistencyLevel: 'Session'
     }
-    // Enable RBAC for Cosmos data plane access if needed later
-    // disableLocalAuth: false
   }
 }
 
@@ -180,53 +177,48 @@ resource cosmos 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
 resource cae 'Microsoft.App/managedEnvironments@2023-05-01' = {
   name: containerAppsEnvName
   location: location
-  tags: { // Add tags
+  tags: {
     environment: environment
     application: 'SmartEducator AI Detector'
     purpose: purpose
   }
   properties: {
-    // Assign Key Vault for ACA environment secrets if needed (optional but good practice)
-    // daprAIInstrumentationKey: applicationInsights.properties.instrumentationKey // If using App Insights
-    // zoneRedundant: (environment == 'prod') ? true : false // Example: Zonal redundancy for prod
+    // Add specific properties if needed
   }
 }
 
-// --- ADD THE CONTAINER APP DEFINITION ---
+// Container App
 resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   name: containerAppName
   location: location
-  tags: { // Add tags
+  tags: {
     environment: environment
     application: 'SmartEducator AI Detector'
     purpose: purpose
   }
-  // Enable System Assigned Managed Identity
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned' // Enable System Assigned Managed Identity
   }
   properties: {
     managedEnvironmentId: cae.id // Link to the Container Apps Environment
     configuration: {
-      // --- Add Registries Configuration ---
+      // Configure registry credentials to use the managed identity
       registries: [
         {
           server: acrLoginServer // Use the variable for ACR FQDN
-          identity: 'system' // Tells ACA to use its system-assigned managed identity
+          identity: 'system'     // Use the system-assigned identity
         }
-        // Add similar entries here if your app needs to pull from other private registries
       ]
-      // --- End Registries Configuration ---
-      secrets: null // Keep this null if not using ACA secrets block
-      // ingress: { ... } // Keep your ingress config if you have it
+      secrets: null // Not using ACA secrets block, using Key Vault instead
+      // ingress: { ... } // Add your ingress configuration here if needed
     }
     template: {
       containers: [
         {
-          name: 'backend-api' // Choose a container name
-          image: containerImage // Use the parameter for the image
+          name: 'backend-api' // Container name
+          image: containerImage // Image passed from workflow
           resources: {
-            cpu: json(containerAppCpuCoreCount) // Use CPU param (Corrected)
+            cpu: json(containerAppCpuCoreCount) // Use CPU param (as string)
             memory: containerAppMemoryGiB // Use Memory param
           }
           env: [
@@ -235,12 +227,12 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'ENVIRONMENT'
               value: environment
             }
-            // --- Environment variables referencing Key Vault secrets ---
+            // App needs to know the Key Vault name to fetch secrets
             {
               name: 'AZURE_KEY_VAULT_NAME'
               value: kv.name
             }
-            // App code will use this name + the secret name + Managed Identity to fetch secrets.
+            // Add other non-secret env vars here if needed
           ]
         }
       ]
@@ -251,23 +243,52 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-  // Add dependsOn if not already present
+  // Add explicit dependsOn for clarity
   dependsOn: [
-    cae
+    cae,
     kv
   ]
 }
 
-// --- Grant Container App's Managed Identity access to Key Vault ---
+// Key Vault Role Assignment for Container App
 resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId) // Create a unique name for the role assignment
-  scope: kv // Scope the assignment to the Key Vault
+  // Scope directly to the Key Vault resource
+  scope: kv
+  name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId) // Create a unique name
   properties: {
     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-    principalId: ca.identity.principalId // The principal ID of the Container App's System Assigned Identity
+    principalId: ca.identity.principalId // The principal ID of the Container App's Identity
     principalType: 'ServicePrincipal'
   }
+  // Ensure Container App identity exists before assigning role
+  dependsOn: [
+    ca
+  ]
 }
+
+// --- ADDED ACR PULL ROLE ASSIGNMENT ---
+// Grant Container App's Managed Identity AcrPull role on the ACR
+
+// Construct the ACR Resource ID dynamically based on naming convention
+// This assumes the ACR was created manually or by another process following this name pattern
+var acrResourceId = resourceId('Microsoft.ContainerRegistry/registries', acrName)
+
+resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  // Scope directly to the ACR resource (best practice if ACR was defined here)
+  // Scoping to RG as ACR is not defined in this file. This should still work.
+  scope: resourceGroup()
+  name: guid(acrResourceId, ca.id, acrPullRoleDefinitionId) // Unique name for the assignment
+  properties: {
+    roleDefinitionId: acrPullRoleDefinitionId // AcrPull Role ID
+    principalId: ca.identity.principalId // Principal ID of the Container App's Identity
+    principalType: 'ServicePrincipal'
+  }
+  // Ensure Container App identity exists before assigning role
+  dependsOn: [
+    ca
+  ]
+}
+// --- END OF ADDED ROLE ASSIGNMENT ---
 
 
 // --- Outputs ---
@@ -275,5 +296,5 @@ output keyVaultName string = kv.name
 output storageAccountName string = st.name
 output cosmosDbAccountName string = cosmos.name
 output containerAppsEnvId string = cae.id
-output containerAppName string = ca.name // Output the Container App name
-output containerAppPrincipalId string = ca.identity.principalId // Output the managed identity ID (useful for debugging)
+output containerAppName string = ca.name
+output containerAppPrincipalId string = ca.identity.principalId // Output managed identity ID
