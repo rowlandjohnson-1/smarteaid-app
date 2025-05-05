@@ -246,7 +246,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   // Add explicit dependsOn for clarity
   dependsOn: [
     cae,
-    kv
+    kv // REMOVED TRAILING COMMA HERE
   ]
 }
 
@@ -266,7 +266,7 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   ]
 }
 
-// --- ADDED ACR PULL ROLE ASSIGNMENT ---
+// ACR Pull Role Assignment for Container App
 // Grant Container App's Managed Identity AcrPull role on the ACR
 
 // Construct the ACR Resource ID dynamically based on naming convention
@@ -288,7 +288,6 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     ca
   ]
 }
-// --- END OF ADDED ROLE ASSIGNMENT ---
 
 
 // --- Outputs ---
