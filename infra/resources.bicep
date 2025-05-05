@@ -52,7 +52,13 @@ param storageConnectionString string
 var uniqueSeed = uniqueString(subscription().subscriptionId)
 var shortUniqueSeed = take(uniqueSeed, 8)
 var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${environment}-${shortUniqueSeed}'
-var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${environment}${shortUniqueSeed}')
+
+// --- Modify Storage Account Naming ---
+// Use 'stg' suffix specifically for staging environment to shorten name
+var storageEnvSuffix = (environment == 'staging') ? 'stg' : environment
+var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${storageEnvSuffix}${shortUniqueSeed}')
+// --- End Modification ---
+
 var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}'
