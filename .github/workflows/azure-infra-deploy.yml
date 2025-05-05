@@ -12,7 +12,7 @@ on:
         type: choice
         options:
           - dev
-          - stg      # Use 'staging' if you named your environment/param file 'staging'
+          - staging
           - prod
       image_tag:
         description: 'Docker image tag to configure (e.g., latest, commit SHA)'
