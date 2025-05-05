@@ -245,8 +245,8 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   }
   // Add explicit dependsOn for clarity
   dependsOn: [
-    cae,
-    kv // REMOVED TRAILING COMMA HERE
+    cae
+    kv
   ]
 }
 
