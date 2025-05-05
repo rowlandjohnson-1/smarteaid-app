@@ -55,6 +55,10 @@ var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-$
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Name for the Container App itself
 
+// ACR Name (assuming a naming convention)
+var acrName = toLower('acr${companyPrefix}${purpose}${environment}') 
+var acrLoginServer = '${acrName}.azurecr.io'
+
 // Define consistent secret names to be used in Key Vault and referenced by the app
 var secretNameCosmosConnectionString = 'CosmosDbConnectionString'
 var secretNameKindeClientSecret = 'KindeClientSecret'
@@ -204,14 +208,17 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   properties: {
     managedEnvironmentId: cae.id // Link to the Container Apps Environment
     configuration: {
-      // Use Key Vault for secrets instead of ACA secrets block
-      secrets: null
-      // ingress: { // Define ingress if the app needs to be publicly accessible
-      //   external: true
-      //   targetPort: 80 // Or whatever port your FastAPI app listens on (e.g., 8000)
-      //   transport: 'auto'
-      // }
-      // activeRevisionsMode: 'single' // Or 'multiple' for staged rollouts
+      // --- Add Registries Configuration ---
+      registries: [
+        {
+          server: acrLoginServer // Use the variable for ACR FQDN
+          identity: 'system' // Tells ACA to use its system-assigned managed identity
+        }
+        // Add similar entries here if your app needs to pull from other private registries
+      ]
+      // --- End Registries Configuration ---
+      secrets: null // Keep this null if not using ACA secrets block
+      // ingress: { ... } // Keep your ingress config if you have it
     }
     template: {
       containers: [
@@ -219,8 +226,8 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
           name: 'backend-api' // Choose a container name
           image: containerImage // Use the parameter for the image
           resources: {
-            cpu: json(containerAppCpuCoreCount)
-            memory: containerAppMemoryGiB
+            cpu: json(containerAppCpuCoreCount) // Use CPU param (Corrected)
+            memory: containerAppMemoryGiB // Use Memory param
           }
           env: [
             // Standard environment variables
@@ -229,23 +236,11 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
               value: environment
             }
             // --- Environment variables referencing Key Vault secrets ---
-            // The app needs to know the Key Vault name to construct the reference URI,
-            // or use specific ACA Key Vault reference syntax if available/preferred.
-            // Simpler approach: Pass Key Vault Name as an Env Var
             {
               name: 'AZURE_KEY_VAULT_NAME'
               value: kv.name
             }
             // App code will use this name + the secret name + Managed Identity to fetch secrets.
-            // Alternatively, use the ACA specific syntax:
-            // {
-            //   name: 'DATABASE_URL'
-            //   secretRef: secretNameCosmosConnectionString // MUST match name in Key Vault!
-            // },
-            // {
-            //   name: 'KINDE_CLIENT_SECRET'
-            //   secretRef: secretNameKindeClientSecret
-            // }, // ... and so on for Stripe, Storage
           ]
         }
       ]
@@ -256,6 +251,11 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
+  // Add dependsOn if not already present
+  dependsOn: [
+    cae, // Depends on Container Apps Environment
+    kv // Depends on Key Vault for identity
+  ]
 }
 
 // --- Grant Container App's Managed Identity access to Key Vault ---
