@@ -70,7 +70,6 @@ var secretNameStorageConnectionString = 'StorageConnectionString'
 
 // Role Definition IDs
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID
 
 // --- Resource Definitions ---
 
@@ -271,24 +270,6 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 
 // Construct the ACR Resource ID dynamically based on naming convention
 // This assumes the ACR was created manually or by another process following this name pattern
-var acrResourceId = resourceId('Microsoft.ContainerRegistry/registries', acrName)
-
-resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  // Scope directly to the ACR resource (best practice if ACR was defined here)
-  // Scoping to RG as ACR is not defined in this file. This should still work.
-  scope: resourceGroup()
-  name: guid(acrResourceId, ca.id, acrPullRoleDefinitionId) // Unique name for the assignment
-  properties: {
-    roleDefinitionId: acrPullRoleDefinitionId // AcrPull Role ID
-    principalId: ca.identity.principalId // Principal ID of the Container App's Identity
-    principalType: 'ServicePrincipal'
-  }
-  // Ensure Container App identity exists before assigning role
-  dependsOn: [
-    ca
-  ]
-}
-
 
 // --- Outputs ---
 output keyVaultName string = kv.name
