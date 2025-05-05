@@ -84,7 +84,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     tenantId: subscription().tenantId
     enableRbacAuthorization: true // RBAC is required for Managed Identity access
     // Purge protection might prevent immediate deletion/recreation in dev, consider making it conditional
-    enablePurgeProtection: (environment == 'prod') ? true : false
+    enablePurgeProtection: true
     softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7
   }
 
