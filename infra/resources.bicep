@@ -7,7 +7,7 @@ param companyPrefix string
 param purpose string
 
 @description('The environment (e.g., dev, test, prod).')
-param environment string
+param environment string // This will be 'dev', 'stg', or 'prod'
 
 @description('Primary Azure region for resource deployment.')
 param location string
@@ -51,22 +51,21 @@ param storageConnectionString string
 // --- Variables ---
 var uniqueSeed = uniqueString(subscription().subscriptionId)
 var shortUniqueSeed = take(uniqueSeed, 8)
-var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${environment}-${shortUniqueSeed}'
 
-// --- Modify Storage Account Naming ---
-// Use 'stg' suffix specifically for staging environment to shorten name
-var storageEnvSuffix = (environment == 'staging') ? 'stg' : environment
-var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${storageEnvSuffix}${shortUniqueSeed}')
-// --- End Modification ---
+// --- Naming Convention Fixes for 'stg' ---
+var vaultEnvSuffix = (environment == 'stg') ? 'stg' : environment // Use 'stg' if environment is 'stg'
+var storageEnvSuffix = (environment == 'stg') ? 'stg' : environment // Use 'stg' if environment is 'stg'
+// --- End Naming Fixes ---
 
-var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}'
-var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
-var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}'
+var keyVaultName = 'kv-${companyPrefix}-${locationShort}-${vaultEnvSuffix}-${shortUniqueSeed}' // Use suffix
+var storageAccountName = toLower('st${companyPrefix}${locationShort}${take(purpose, 3)}${storageEnvSuffix}${shortUniqueSeed}') // Use suffix
+var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Stays same
+var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Stays same
+var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}' // Stays same
 
 // Construct ACR name and login server based on parameters
-// IMPORTANT: This assumes your manually created ACRs follow this exact naming pattern!
-var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // Example: acrsdtaidetectordev
-var acrLoginServer = '${acrName}.azurecr.io' // Example: acrsdtaidetectordev.azurecr.io
+var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // Uses 'stg' correctly now
+var acrLoginServer = '${acrName}.azurecr.io' // Example: acrsdtaidetectorstg.azurecr.io
 
 // Define consistent secret names
 var secretNameCosmosConnectionString = 'CosmosDbConnectionString'
@@ -76,12 +75,13 @@ var secretNameStorageConnectionString = 'StorageConnectionString'
 
 // Role Definition IDs
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+// var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID - Removed as per user request
 
 // --- Resource Definitions ---
 
 // Key Vault
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: keyVaultName
+  name: keyVaultName // Uses corrected name logic
   location: location
   tags: {
     environment: environment
@@ -128,7 +128,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
 
 // Storage Account
 resource st 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: storageAccountName
+  name: storageAccountName // Uses corrected name logic
   location: location
   tags: {
     environment: environment
@@ -250,7 +250,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   }
   // Add explicit dependsOn for clarity
   dependsOn: [
-    cae
+    cae,
     kv
   ]
 }
@@ -271,11 +271,22 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   ]
 }
 
-// ACR Pull Role Assignment for Container App
-// Grant Container App's Managed Identity AcrPull role on the ACR
-
-// Construct the ACR Resource ID dynamically based on naming convention
-// This assumes the ACR was created manually or by another process following this name pattern
+// REMOVED ACR Role Assignment - Relying on manual assignment for now
+/*
+var acrResourceId = resourceId('Microsoft.ContainerRegistry/registries', acrName)
+resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: resourceGroup()
+  name: guid(acrResourceId, ca.id, acrPullRoleDefinitionId)
+  properties: {
+    roleDefinitionId: acrPullRoleDefinitionId
+    principalId: ca.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    ca
+  ]
+}
+*/
 
 // --- Outputs ---
 output keyVaultName string = kv.name

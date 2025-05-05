@@ -10,9 +10,9 @@ on:
         description: 'Target environment (dev, stg, prod)'
         required: true
         type: choice
-        options:
+        options: # <-- Ensure this list matches your desired environment names
           - dev
-          - staging
+          - stg # <-- Use 'stg' consistently now
           - prod
       image_tag:
         description: 'Docker image tag to configure (e.g., latest, commit SHA)'
@@ -31,31 +31,21 @@ jobs:
 
     # Link the job to the GitHub Environment matching the input
     # This makes environment-specific secrets available
-    environment: ${{ github.event.inputs.environment }}
+    environment: ${{ github.event.inputs.environment }} # This now correctly links to 'stg' when selected
 
     steps:
     # 1. Checkout repository code so the workflow can access Bicep files
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 2. Log in to Azure using the Service Principal secrets stored in GitHub Environments
-    #    Using the inline JSON construction method.
+    # 2. Log in to Azure using the single 'creds' JSON input
+    #    Ensure the secrets referenced here are for the CORRECT SP (5c69...)
+    #    in the target GitHub Environment (e.g., stg)
     - name: Login to Azure
       uses: azure/login@v1
       with:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-        enable-AzPSSession: false # Keep false unless needed
-
-    # --- ADD THIS NEW STEP ---
-    - name: Verify Azure Login Identity
-      run: |
-        echo "Checking logged in Azure CLI identity..."
-        az account show --query user --output table
-        echo "Checking logged in Service Principal (if applicable)..."
-        az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
-        az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
-      shell: bash
-    # --- END NEW STEP ---
+        enable-AzPSSession: false
 
     # 3. (Optional) Install/Verify Bicep CLI
     - name: Install/Verify Bicep CLI
@@ -73,8 +63,9 @@ jobs:
         echo "Input Environment: ${{ github.event.inputs.environment }}"
         echo "Input Image Tag: ${{ github.event.inputs.image_tag }}"
 
-        # --- !!! IMPORTANT: ADJUST THESE VALUES !!! ---
-        ACR_NAME="acrsdtaidetector${{ github.event.inputs.environment }}" # Example ACR name convention
+        # --- !!! IMPORTANT: ADJUST THESE VALUES IF NEEDED !!! ---
+        # This now correctly uses 'stg' when passed from the input
+        ACR_NAME="acrsdtaidetector${{ github.event.inputs.environment }}"
         REPO_NAME="backend-api" # Example repo name in ACR
         # --- !!! END OF ADJUSTABLE VALUES !!! ---
         echo "Using ACR Name: ${ACR_NAME}"
@@ -90,7 +81,7 @@ jobs:
         # Set the output variable
         echo "imageName=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
 
-    # 5. Deploy Bicep template at Subscription scope - CORRECTED SCRIPT
+    # 5. Deploy Bicep template at Subscription scope - Uses correct secrets via environment link
     - name: Deploy Bicep File
       uses: azure/cli@v1
       with:
@@ -118,7 +109,18 @@ jobs:
 
           echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
 
-    # 6. Azure Logout (Good practice)
+    # 6. Verify Azure Login Identity (Keep this for debugging)
+    - name: Verify Azure Login Identity
+      run: |
+        echo "Checking logged in Azure CLI identity..."
+        az account show --query user --output table
+        echo "Checking logged in Service Principal (if applicable)..."
+        az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
+        # This uses the secret from the environment the job is linked to
+        az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
+      shell: bash
+
+    # 7. Azure Logout (Good practice)
     - name: Azure Logout
       run: az logout
       if: always() # Run even if previous steps fail
