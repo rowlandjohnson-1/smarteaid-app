@@ -18,7 +18,7 @@ param locationShort string
 param containerImage string // Required: Pass this in from workflow (e.g., includes tag/SHA)
 
 @description('Specifies the CPU allocation for the container app.')
-param containerAppCpuCoreCount number = (environment == 'prod') ? 1.0 : 0.5
+param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
 
 @description('Specifies the memory allocation for the container app.')
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
@@ -219,7 +219,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
           name: 'backend-api' // Choose a container name
           image: containerImage // Use the parameter for the image
           resources: {
-            cpu: json(string(containerAppCpuCoreCount))
+            cpu: json(containerAppCpuCoreCount)
             memory: containerAppMemoryGiB
           }
           env: [

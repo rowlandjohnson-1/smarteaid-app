@@ -71,29 +71,46 @@ jobs:
 
     # 5. Deploy Bicep template at Subscription scope
     - name: Deploy Bicep File
-      uses: azure/cli@v1
+      uses: azure/CLI@v1
       with:
+        azcliversion: 2.34.1 # Specify a version if needed
         inlineScript: |
-          echo "Starting Bicep deployment for environment: ${{ github.event.inputs.environment }}"
-          echo "Using parameter file: ./infra/params/${{ github.event.inputs.environment }}.bicepparam"
-          echo "Using container image: ${{ steps.image_name.outputs.imageName }}"
+          # --- START REPLACEMENT SCRIPT (Content from github_workflow_update_02) ---
+          echo "Starting Bicep deployment..."
+          # Construct parameters string
+          # Note: Secrets should be securely passed from GitHub Secrets
+          parameters=" \
+            environment=${{ env.ENVIRONMENT_NAME }} \
+            containerImage=${{ env.CONTAINER_REGISTRY_LOGIN_SERVER }}/${{ env.CONTAINER_IMAGE_NAME }}:${{ needs.build_and_push.outputs.image_tag }} \
+            cosmosDbConnectionString='${{ secrets.COSMOS_DB_CONNECTION_STRING }}' \
+            kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
+            stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
+            storageConnectionString='${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' \
+          "
+          # Add optional params only if they have values (adjust logic if needed)
+          if [[ -n "${{ env.CONTAINER_APP_CPU_CORE_COUNT }}" ]]; then
+            parameters="$parameters containerAppCpuCoreCount=${{ env.CONTAINER_APP_CPU_CORE_COUNT }}"
+          fi
+          if [[ -n "${{ env.CONTAINER_APP_MEMORY_GIB }}" ]]; then
+            parameters="$parameters containerAppMemoryGiB=${{ env.CONTAINER_APP_MEMORY_GIB }}"
+          fi
+          if [[ -n "${{ env.CONTAINER_APP_MIN_REPLICAS }}" ]]; then
+            parameters="$parameters containerAppMinReplicas=${{ env.CONTAINER_APP_MIN_REPLICAS }}"
+          fi
+          if [[ -n "${{ env.CONTAINER_APP_MAX_REPLICAS }}" ]]; then
+            parameters="$parameters containerAppMaxReplicas=${{ env.CONTAINER_APP_MAX_REPLICAS }}"
+          fi
 
-          # Define deployment location
-          DEPLOYMENT_LOCATION="uksouth" # Or your preferred Azure region
+          echo "Using parameters: $parameters"
 
-          # Run the deployment command with dynamic parameters
           az deployment sub create \
-            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}" \
-            --location ${DEPLOYMENT_LOCATION} \
-            --template-file ./infra/main.bicep \
-            --parameters ./infra/params/${{ github.event.inputs.environment }}.bicepparam \
-            --parameters containerImage=${{ steps.image_name.outputs.imageName }} \
-            --parameters cosmosDbConnectionString=${{ secrets.COSMOS_DB_CONNECTION_STRING }} \
-            --parameters kindeClientSecret=${{ secrets.KINDE_CLIENT_SECRET }} \
-            --parameters stripeSecretKey=${{ secrets.STRIPE_SECRET_KEY }} \
-            --parameters storageConnectionString=${{ secrets.STORAGE_CONNECTION_STRING }}
+            --name "${{ env.AZURE_RESOURCE_PREFIX }}-${{ env.ENVIRONMENT_NAME }}-${{ github.run_number }}" \
+            --location ${{ env.AZURE_LOCATION }} \
+            --template-file infra/main.bicep \
+            --parameters $parameters
 
-          echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
+          echo "Bicep deployment finished."
+          # --- END REPLACEMENT SCRIPT ---
 
     # 6. Azure Logout (Good practice)
     - name: Azure Logout
