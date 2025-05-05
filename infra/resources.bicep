@@ -253,8 +253,8 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   }
   // Add dependsOn if not already present
   dependsOn: [
-    cae, // Depends on Container Apps Environment
-    kv // Depends on Key Vault for identity
+    cae
+    kv
   ]
 }
 
