@@ -1,69 +1,101 @@
+# .github/workflows/azure-infra-deploy.yml
+
 name: Deploy Azure Infrastructure
-# Trigger workflow on pushes to the main branch targeting the infra path,
-# or allow manual triggering from the Actions tab
+
+# Allow manual triggering from the GitHub Actions UI ONLY
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'infra/**' # Only run automatically if files in infra/ change
-  workflow_dispatch: # Allows manual triggering anytime
-# Permissions needed for runner environment
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (dev, stg, prod)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg      # Use 'staging' if you named your environment/param file 'staging'
+          - prod
+      image_tag:
+        description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+        required: true
+        default: 'latest' # Default value, adjust as needed
+
+# Permissions needed by the runner
 permissions:
-  id-token: write # Potentially needed by Azure actions internally
+  id-token: write # May be needed by azure/login internally
   contents: read  # To checkout the code
+
 jobs:
   deploy_infrastructure:
-    name: Deploy Bicep Infrastructure
-    runs-on: ubuntu-latest # Use a standard Linux runner environment
+    name: Deploy Infra to ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+
+    # Link the job to the GitHub Environment matching the input
+    # This makes environment-specific secrets available
+    environment: ${{ github.event.inputs.environment }}
+
     steps:
-    # Step 1: Check out the repository code so the workflow can access it
+    # 1. Checkout repository code so the workflow can access Bicep files
     - name: Checkout Code
       uses: actions/checkout@v4
-    # Step 2: Log in to Azure using the Service Principal credentials via the 'creds' input
+
+    # 2. Log in to Azure using the Service Principal secrets stored in GitHub Environments
+    #    Using the inline JSON construction method from your original file.
     - name: Login to Azure
       uses: azure/login@v1
       with:
-        # Use the 'creds' input method, passing a JSON string with secrets:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-        # Keep false unless you specifically need PowerShell Az module later
-        enable-AzPSSession: false
-    # Step 3: Install Bicep CLI directly from Microsoft's instructions
-    - name: Install Bicep CLI
+        enable-AzPSSession: false # Keep false unless needed
+
+    # 3. (Optional but kept from your file) Install/Verify Bicep CLI
+    #    Note: azure/cli@v1 usually includes Bicep, this might be redundant.
+    - name: Install/Verify Bicep CLI
       run: |
-        # Make sure Azure CLI is updated
-        az upgrade --yes
-        
-        # Install Bicep using the official Azure CLI command
+        echo "Attempting to ensure Bicep CLI is available..."
         az bicep install
-        
-        # Create the expected directory if it doesn't exist
-        mkdir -p /home/runner/.azure/bin
-        
-        # Check if bicep exists in another location and link it to where Azure expects it
-        if [ -f "/usr/local/bin/bicep" ]; then
-          echo "Found bicep in /usr/local/bin, linking to .azure/bin"
-          ln -s /usr/local/bin/bicep /home/runner/.azure/bin/bicep
-        fi
-        
-        # Make sure bicep is executable
-        chmod +x /home/runner/.azure/bin/bicep 2>/dev/null || true
-        
-        # Verify Bicep installation and path
-        which bicep || echo "Bicep not found in PATH"
-        ls -la /home/runner/.azure/bin || echo "Directory doesn't exist"
-        
-        # Check Azure CLI can find Bicep
-        az bicep version || echo "Azure CLI can't find Bicep"
-    
-    # Step 4: Deploy Bicep File directly with az CLI, avoiding GitHub Actions
-    - name: Deploy Bicep File
+        az bicep version
+      continue-on-error: true # Allow to continue even if Bicep is already managed by az cli
+
+    # 4. Construct Container Image Name (Adjust ACR name/repo path if needed)
+    - name: Set Image Name variable
+      id: image_name
       run: |
-        # Export PATH to include .azure/bin
-        export PATH=$PATH:/home/runner/.azure/bin
-        
-        # Execute deployment with explicit locations
-        az deployment sub create \
-          --location uksouth \
-          --template-file ./infra/main.bicep \
-          --parameters ./infra/main.bicepparam \
-          --name deploy-smarteaid-infra-${{ github.run_number }}
+        # --- !!! IMPORTANT: ADJUST THESE VALUES !!! ---
+        ACR_NAME="acrsdtaidetector${{ github.event.inputs.environment }}" # Example ACR name convention
+        REPO_NAME="backend-api" # Example repo name in ACR
+        # --- !!! END OF ADJUSTABLE VALUES !!! ---
+
+        TAG="${{ github.event.inputs.image_tag }}"
+        FULL_IMAGE_NAME="${ACR_NAME}.azurecr.io/${REPO_NAME}:${TAG}"
+        echo "Constructed image name: ${FULL_IMAGE_NAME}"
+        echo "imageName=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
+
+    # 5. Deploy Bicep template at Subscription scope
+    - name: Deploy Bicep File
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          echo "Starting Bicep deployment for environment: ${{ github.event.inputs.environment }}"
+          echo "Using parameter file: ./infra/params/${{ github.event.inputs.environment }}.bicepparam"
+          echo "Using container image: ${{ steps.image_name.outputs.imageName }}"
+
+          # Define deployment location
+          DEPLOYMENT_LOCATION="uksouth" # Or your preferred Azure region
+
+          # Run the deployment command with dynamic parameters
+          az deployment sub create \
+            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}" \
+            --location ${DEPLOYMENT_LOCATION} \
+            --template-file ./infra/main.bicep \
+            --parameters ./infra/params/${{ github.event.inputs.environment }}.bicepparam \
+            --parameters containerImage=${{ steps.image_name.outputs.imageName }} \
+            --parameters cosmosDbConnectionString=${{ secrets.COSMOS_DB_CONNECTION_STRING }} \
+            --parameters kindeClientSecret=${{ secrets.KINDE_CLIENT_SECRET }} \
+            --parameters stripeSecretKey=${{ secrets.STRIPE_SECRET_KEY }} \
+            --parameters storageConnectionString=${{ secrets.STORAGE_CONNECTION_STRING }}
+
+          echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
+
+    # 6. Azure Logout (Good practice)
+    - name: Azure Logout
+      run: az logout
+      if: always() # Run even if previous steps fail
