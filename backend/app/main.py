@@ -2,11 +2,12 @@
 import logging
 import psutil # For system metrics in health check
 import time   # For uptime calculation
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
 from datetime import datetime, timedelta, timezone # For uptime calculation
 import asyncio
+from fastapi import status
 
 # Import config and database lifecycle functions
 # Adjust path '.' based on where main.py is relative to 'core' and 'db'
@@ -143,6 +144,24 @@ async def health_check() -> Dict[str, Any]:
         health_info["status"] = "WARNING"
 
     return health_info
+
+# --- Liveness and Readiness Probes ---
+@app.get("/healthz", tags=["Probes"], status_code=status.HTTP_200_OK)
+async def liveness_probe():
+    """Liveness probe: Checks if the application process is running and responsive."""
+    return {"status": "live"}
+
+@app.get("/readyz", tags=["Probes"])
+async def readiness_probe(response: Response):
+    """Readiness probe: Checks if the application is ready to serve traffic (e.g., DB connected)."""
+    db_health = await check_database_health()
+    if db_health.get("status") == "OK":
+        response.status_code = status.HTTP_200_OK
+        return {"status": "ready", "database": db_health}
+    else:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_ready", "database": db_health}
+# --- End Probes ---
 
 # --- Include API Routers ---
 # Apply the configured prefix (e.g., /api/v1) to all included routers

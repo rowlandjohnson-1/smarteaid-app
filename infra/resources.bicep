@@ -202,7 +202,7 @@ resource cae 'Microsoft.App/managedEnvironments@2023-05-01' = {
     purpose: purpose
   }
   properties: {
-    // Add specific properties if needed
+    // Add specific properties if needed, e.g., VNet integration, Log Analytics workspace
   }
 }
 
@@ -218,97 +218,132 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   identity: {
     type: 'SystemAssigned' // Enable System Assigned Managed Identity
   }
-  properties: {
-    managedEnvironmentId: cae.id // Link to the Container Apps Environment
+  properties: { // <<<< THIS BLOCK IS UPDATED BASED ON bicep_container_app_config_v2 >>>>
+    managedEnvironmentId: cae.id // Reference to your Container Apps Environment
     configuration: {
-      // Configure registry credentials to use the managed identity
       registries: [
         {
-          server: acrLoginServer // Use the variable for ACR FQDN
-          identity: 'system'    // Use the system-assigned identity
+          server: acrLoginServer // Your ACR login server (e.g., from a variable)
+          identity: 'system'    // Using system-assigned managed identity for ACR pull
         }
       ]
-
-      // --- REFINED CORRECTED SECRETS BLOCK ---
       secrets: [
-        // For each secret you need from Key Vault, define it here.
-        // The 'name' is the internal ACA name used by secretRef.
-        // ACA implicitly uses this 'name' to look up the secret with the same name in Key Vault
-        // using the specified identity and keyVaultUrl.
+        // Your existing secrets array for Key Vault integration
         {
-          name: secretNameCosmosConnectionString // Internal ACA Name (e.g., 'cosmos-db-connection-string')
-          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameCosmosConnectionString}'   // Corrected: Full secret URI
-          identity: 'system'                    // Use system identity to access KV
-        }
-        {
-          name: secretNameKindeClientSecret     // Internal ACA Name ('kinde-client-secret')
-          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameKindeClientSecret}'    // Corrected: Full secret URI
+          name: secretNameCosmosConnectionString
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameCosmosConnectionString}'
           identity: 'system'
         }
         {
-          name: secretNameStripeSecretKey       // Internal ACA Name ('stripe-secret-key')
-          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStripeSecretKey}'      // Corrected: Full secret URI
+          name: secretNameKindeClientSecret
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameKindeClientSecret}'
           identity: 'system'
         }
         {
-          name: secretNameStorageConnectionString // Internal ACA Name ('storage-connection-string')
-          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStorageConnectionString}' // Corrected: Full secret URI
+          name: secretNameStripeSecretKey
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStripeSecretKey}'
+          identity: 'system'
+        }
+        {
+          name: secretNameStorageConnectionString
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStorageConnectionString}'
           identity: 'system'
         }
       ]
-      // ingress: { ... } // Add your ingress configuration here if needed
+      ingress: {
+        external: false // Set to true if you need public internet access from outside the VNet/CAE
+        targetPort: 8000 // *** Correct: Matches your FastAPI Uvicorn port from logs ***
+        transport: 'auto' // Automatically determines HTTP/HTTP2
+        // allowInsecure: false // Default is false. Set to true only if terminating SSL at an upstream gateway
+                             // and want plain HTTP between the gateway and the container app.
+      }
     }
     template: {
       containers: [
         {
-          name: 'backend-api' // Container name
-          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          name: 'backend-api' // Your container name
+          image: containerImage // *** Correct: Uses the parameter for your actual application image ***
           resources: {
-            cpu: json(containerAppCpuCoreCount)
-            memory: containerAppMemoryGiB
+            cpu: json(containerAppCpuCoreCount) // e.g., 0.5
+            memory: containerAppMemoryGiB     // e.g., '1.0Gi'
           }
           env: [
+            // Your existing environment variables, including those using secretRef
             {
               name: 'ENVIRONMENT'
               value: environment
             }
-            // --- Secrets Referenced from Key Vault ---
             {
               name: 'MONGODB_URL'
-              secretRef: secretNameCosmosConnectionString // References the secret NAME in Key Vault
+              secretRef: secretNameCosmosConnectionString
             }
             {
               name: 'KINDE_CLIENT_SECRET'
-              secretRef: secretNameKindeClientSecret // References the secret NAME in Key Vault
+              secretRef: secretNameKindeClientSecret
             }
             {
               name: 'STRIPE_SECRET_KEY'
-              secretRef: secretNameStripeSecretKey // References the secret NAME in Key Vault
+              secretRef: secretNameStripeSecretKey
             }
             {
               name: 'AZURE_BLOB_CONNECTION_STRING'
-              secretRef: secretNameStorageConnectionString // References the secret NAME in Key Vault
+              secretRef: secretNameStorageConnectionString
             }
-            // --- Non-Secrets remain using 'value' ---
             {
               name: 'KINDE_DOMAIN'
-              value: kindeDomain // Keep as direct value
+              value: kindeDomain
             }
             {
               name: 'KINDE_AUDIENCE'
-              value: kindeAudience // Keep as direct value
+              value: kindeAudience
             }
-            // Optional: Add KINDE_CLIENT_ID if needed (would require adding param and passing value)
+          ]
+          probes: [
+            {
+              type: 'Liveness' // Determines if the container is running and responsive
+              httpGet: {
+                path: '/healthz' // *** Correct: Matches your FastAPI liveness endpoint ***
+                port: 8000       // *** Correct: Matches your FastAPI Uvicorn port ***
+                scheme: 'HTTP'   // Your application serves HTTP on this port
+              }
+              initialDelaySeconds: 30 // Time (seconds) to wait after container starts before first probe
+                                      // Allow time for app init, DB connection (as seen in your logs)
+              periodSeconds: 30       // How often (seconds) to perform the probe
+              failureThreshold: 3     // Number of consecutive failures after which container is considered unhealthy
+              timeoutSeconds: 5       // Seconds after which the probe times out
+            }
+            {
+              type: 'Readiness' // Determines if the container is ready to accept traffic
+              httpGet: {
+                path: '/readyz'  // *** Correct: Matches your FastAPI readiness endpoint ***
+                port: 8000       // *** Correct: Matches your FastAPI Uvicorn port ***
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 35 // Give slightly more time for readiness checks (e.g., DB fully ready)
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 10      // Readiness probe might involve DB checks, so allow a bit more time
+            }
+            // Optional: Startup Probe (if your app has a very long startup time
+            // before even the liveness probe should be active)
             // {
-            //   name: 'KINDE_CLIENT_ID'
-            //   value: kindeClientId // Assuming you add a kindeClientId param
+            //   type: 'Startup'
+            //   httpGet: {
+            //     path: '/healthz' // Can often reuse the liveness path for startup
+            //     port: 8000
+            //     scheme: 'HTTP'
+            //   }
+            //   initialDelaySeconds: 10 // Start probing earlier for startup
+            //   periodSeconds: 15
+            //   failureThreshold: 12    // e.g., 12 attempts * 15s = 3 minutes for startup to complete
+            //   timeoutSeconds: 3
             // }
           ]
         }
       ]
       scale: {
-        minReplicas: containerAppMinReplicas
-        maxReplicas: containerAppMaxReplicas
+        minReplicas: containerAppMinReplicas // e.g., 0 for dev, 1 for prod
+        maxReplicas: containerAppMaxReplicas // e.g., 2 for dev, 5 for prod
         // rules: [ ... ] // Add scaling rules if needed
       }
     }
