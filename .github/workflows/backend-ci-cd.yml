@@ -11,10 +11,10 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment (dev1, dev, stg, prod)' # MODIFIED description
+        description: 'Target environment (dev1, dev, stg, prod)'
         required: true
         type: choice
-        options: # Order changed slightly, dev1 is prominent
+        options:
           - dev1
           - dev
           - stg # Ensure this matches option in azure-infra-deploy.yml (staging vs stg)
@@ -64,13 +64,10 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "environment=dev1" >> $GITHUB_OUTPUT # <<< CHANGED: Pushes to main now target 'dev1'
+            echo "environment=dev1" >> $GITHUB_OUTPUT # Pushes to main now target 'dev1'
           elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
             echo "environment=prod" >> $GITHUB_OUTPUT
           else
-            # If triggered by other branches or events not explicitly handled,
-            # you might want a specific default or an error.
-            # For now, defaulting to 'dev1' if triggered by other means (e.g. a different branch push if added to 'on: push: branches:')
             echo "Unsupported trigger ref: ${{ github.ref }}. Defaulting to dev1 for this push/trigger."
             echo "environment=dev1" >> $GITHUB_OUTPUT
           fi
@@ -114,10 +111,10 @@ jobs:
         with:
           workflow: azure-infra-deploy.yml # Your existing infrastructure deployment workflow
           ref: ${{ github.ref }}
-          inputs: >
+          inputs: > # MODIFIED: Comment removed
             {
               "environment": "${{ needs.determine_config.outputs.environment }}",
-              "image_tag": "placeholder-for-infra-deploy", # Image tag isn't critical for ACR creation
+              "image_tag": "placeholder-for-infra-deploy",
               "companyPrefix": "${{ needs.determine_config.outputs.companyPrefix }}",
               "purpose": "${{ needs.determine_config.outputs.purpose }}"
             }
@@ -177,7 +174,7 @@ jobs:
         with:
           workflow: azure-infra-deploy.yml
           ref: ${{ github.ref }}
-          inputs: >
+          inputs: > # Ensure no comments in this JSON block either
             {
               "environment": "${{ needs.determine_config.outputs.environment }}",
               "image_tag": "${{ needs.determine_config.outputs.image_tag }}",
