@@ -120,7 +120,7 @@ jobs:
         with:
           workflow: azure-infra-deploy.yml
           ref: ${{ github.ref }}
-          inputs: >
+          inputs: |
             {
               "environment": "${{ needs.determine_config.outputs.environment }}",
               "image_tag": "placeholder-for-infra-deploy",
@@ -184,7 +184,7 @@ jobs:
         with:
           workflow: azure-infra-deploy.yml
           ref: ${{ github.ref }}
-          inputs: >
+          inputs: |
             {
               "environment": "${{ needs.determine_config.outputs.environment }}",
               "image_tag": "${{ needs.determine_config.outputs.image_tag }}",
@@ -193,4 +193,3 @@ jobs:
               "deploymentSuffix": "${{ needs.determine_config.outputs.deployment_suffix }}"
             }
           token: ${{ secrets.PAT_TOKEN }}
-#
