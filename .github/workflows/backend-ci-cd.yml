@@ -119,7 +119,6 @@ jobs:
           driver: docker-container
           use: true
           install: true # Ensure buildx is installed
-          endpoint: mybuilder # Define a custom endpoint/builder name
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
