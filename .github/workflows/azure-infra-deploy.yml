@@ -2,7 +2,6 @@
 
 name: Deploy Azure Infrastructure
 
-# Allow manual triggering from the GitHub Actions UI ONLY
 on:
   workflow_dispatch:
     inputs:
@@ -10,13 +9,13 @@ on:
         description: 'Target environment (dev, dev1, staging, prod)'
         required: true
         type: choice
-        options: # <-- MODIFIED: Added 'dev1'
+        options:
           - dev
-          - dev1 # New option for your clean dev environment
+          - dev1
           - staging
           - prod
       image_tag:
-        description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+        description: 'Docker image tag to configure (e.g., latest, commit SHA, or placeholder-for-infra-deploy)'
         required: true
         default: 'latest'
       companyPrefix:
@@ -27,90 +26,61 @@ on:
         description: 'Purpose of the resources (e.g., aidetector)'
         required: true
         default: 'aidetector'
+      deploymentSuffix: # <-- NEW INPUT
+        description: 'A unique suffix for the Bicep module deployment name (e.g., from pipeline run ID or timestamp)'
+        required: true # Make this required as main.bicep needs it
 
-# Permissions needed by the runner
 permissions:
-  id-token: write # May be needed by azure/login internally
-  contents: read  # To checkout the code
+  id-token: write
+  contents: read
 
 jobs:
   deploy_infrastructure:
     name: Deploy Infra to ${{ github.event.inputs.environment }}
     runs-on: ubuntu-latest
-
-    # Link the job to the GitHub Environment matching the input
-    # This makes environment-specific secrets available
-    # Ensure you have a GitHub Environment named 'dev1' if you need specific secrets for it.
     environment: ${{ github.event.inputs.environment }}
 
     steps:
-    # 1. Checkout repository code so the workflow can access Bicep files
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 2. Log in to Azure using the single 'creds' JSON input
-    #    Ensure the secrets referenced here are for the CORRECT SP
-    #    in the target GitHub Environment (e.g., dev1)
     - name: Login to Azure
       uses: azure/login@v1
       with:
         creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
         enable-AzPSSession: false
 
-    # 3. (Optional) Install/Verify Bicep CLI
     - name: Install/Verify Bicep CLI
       run: |
         echo "Attempting to ensure Bicep CLI is available..."
         az bicep install
         az bicep version
-      continue-on-error: true # Allow to continue even if Bicep is already managed by az cli
+      continue-on-error: true
 
-    # 4. Construct Container Image Name - Includes Debugging
     - name: Set Image Name variable
       id: image_name
       run: |
-        echo "--- Debugging Image Name Construction ---"
-        echo "Input Environment: ${{ github.event.inputs.environment }}"
-        echo "Input Image Tag: ${{ github.event.inputs.image_tag }}"
-        echo "Input Company Prefix: ${{ github.event.inputs.companyPrefix }}"
-        echo "Input Purpose: ${{ github.event.inputs.purpose }}"
-
-        # Construct ACR_NAME using the new inputs
-        # Note: If your ACR name doesn't vary per environment, you might hardcode it or use a different variable.
-        # This assumes ACR name includes the environment (e.g., acrsdtaidetectordev, acrsdtaidetectorstaging)
-        ACR_NAME="acr$(echo ${{ github.event.inputs.companyPrefix }} | tr '[:upper:]' '[:lower:]')$(echo ${{ github.event.inputs.purpose }} | tr '[:upper:]' '[:lower:]')$(echo ${{ github.event.inputs.environment }} | tr '[:upper:]' '[:lower:]')"
+        ACR_NAME_LOWER=$(echo "acr${{ github.event.inputs.companyPrefix }}${{ github.event.inputs.purpose }}${{ github.event.inputs.environment }}" | tr '[:upper:]' '[:lower:]')
         REPO_NAME="backend-api" # Ensure this is your correct repository name in ACR
-        
-        echo "Using ACR Name: ${ACR_NAME}"
-        echo "Using Repo Name: ${REPO_NAME}"
-
         TAG="${{ github.event.inputs.image_tag }}"
-        echo "Using Tag: ${TAG}"
-
-        FULL_IMAGE_NAME="${ACR_NAME}.azurecr.io/${REPO_NAME}:${TAG}"
+        
+        FULL_IMAGE_NAME="${ACR_NAME_LOWER}.azurecr.io/${REPO_NAME}:${TAG}"
         echo "Constructed image name: ${FULL_IMAGE_NAME}"
-        echo "--- End Debugging ---"
-
-        # Set the output variable
         echo "imageName=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
       shell: bash
 
-    # 5. Deploy Bicep template at Subscription scope - Uses correct secrets via environment link
     - name: Deploy Bicep File
       uses: azure/cli@v1
       with:
         inlineScript: |
           echo "Starting Bicep deployment for environment: ${{ github.event.inputs.environment }}"
           echo "Using container image: ${{ steps.image_name.outputs.imageName }}"
+          echo "Using deployment suffix: ${{ github.event.inputs.deploymentSuffix }}"
 
-          # Define deployment location (can also be made an input if it varies)
           DEPLOYMENT_LOCATION="uksouth" 
 
-          # Run the deployment command with dynamic parameters
-          # Ensure that secrets (like MONGODB_URL, KINDE_CLIENT_SECRET etc.) are defined
-          # in your GitHub Environment secrets for each target environment (dev, dev1, staging, prod).
           az deployment sub create \
-            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}" \
+            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}" \
             --location ${DEPLOYMENT_LOCATION} \
             --template-file ./infra/main.bicep \
             --parameters environment=${{ github.event.inputs.environment }} \
@@ -123,23 +93,22 @@ jobs:
             --parameters kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
             --parameters stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
             --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
+            --parameters deploymentSuffix='${{ github.event.inputs.deploymentSuffix }}' \
             --debug
-            # Add any other parameters defined in main.bicep here if they aren't handled by defaults/conditionals
-            # or if their defaults should be overridden by workflow inputs.
 
           echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
 
-    # 6. Verify Azure Login Identity (Keep this for debugging)
     - name: Verify Azure Login Identity
       run: |
         echo "Checking logged in Azure CLI identity..."
         az account show --query user --output table
         echo "Checking logged in Service Principal (if applicable)..."
         az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
-        az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
+        # Ensure AZURE_CLIENT_ID secret is available if this check is important
+        # az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
       shell: bash
+      if: always()
 
-    # 7. Azure Logout (Good practice)
     - name: Azure Logout
       run: az logout
-      if: always() # Run even if previous steps fail
+      if: always()
