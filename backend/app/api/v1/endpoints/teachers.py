@@ -9,12 +9,11 @@ from fastapi import APIRouter, HTTPException, status, Query, Depends, Request
 from pydantic import ValidationError
 
 # Import Pydantic models for Teacher
-# Use TeacherCreate for the PUT endpoint's creation step
-from ....models.teacher import Teacher, TeacherCreate, TeacherUpdate
+from app.models.teacher import Teacher, TeacherCreate, TeacherUpdate
 # Import CRUD functions for Teacher
-from ....db import crud
+from app.db import crud
 # Import the authentication dependency
-from ....core.security import get_current_user_payload # Adjust path if needed
+from app.core.security import get_current_user_payload
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)

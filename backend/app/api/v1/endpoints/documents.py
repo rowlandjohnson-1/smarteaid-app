@@ -15,27 +15,22 @@ import httpx # Import httpx for making external API calls
 import re # Import re for word count calculation
 
 # Import models
-# Adjust path based on your structure if needed
-from ....models.document import Document, DocumentCreate, DocumentUpdate
-# --- Import ParagraphResult along with others ---
-from ....models.result import Result, ResultCreate, ResultUpdate, ParagraphResult
-# --- End Import ---
-# Ensure FileType is imported along with other enums
-from ....models.enums import DocumentStatus, ResultStatus, FileType, BatchPriority, BatchStatus
-# Import Batch models
-from ....models.batch import Batch, BatchCreate, BatchUpdate, BatchWithDocuments
+from app.models.document import Document, DocumentCreate, DocumentUpdate
+from app.models.result import Result, ResultCreate, ResultUpdate, ParagraphResult
+from app.models.enums import DocumentStatus, ResultStatus, FileType, BatchPriority, BatchStatus
+from app.models.batch import Batch, BatchCreate, BatchUpdate, BatchWithDocuments
 
 # Import CRUD functions
-from ....db import crud # Assuming crud functions are in app/db/crud.py
+from app.db import crud
 
 # Import Authentication Dependency
-from ....core.security import get_current_user_payload # Adjust path
+from app.core.security import get_current_user_payload
 
-# Import Blob Storage Service (upload is used, assume download exists)
-from ....services.blob_storage import upload_file_to_blob, download_blob_as_bytes # Adjusted path, added download assumption
+# Import Blob Storage Service
+from app.services.blob_storage import upload_file_to_blob, download_blob_as_bytes
 
 # Import Text Extraction Service
-from ....services.text_extraction import extract_text_from_bytes # Adjusted path
+from app.services.text_extraction import extract_text_from_bytes
 
 # Import external API URL from config (assuming you add it there)
 # from ....core.config import ML_API_URL, ML_RECAPTCHA_SECRET # Placeholder - add these to config.py

@@ -6,11 +6,11 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 
 # Import Pydantic models for ClassGroup
-from ....models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
+from app.models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
 # Import CRUD functions for ClassGroup
-from ....db import crud
+from app.db import crud
 # Import the authentication dependency
-from ....core.security import get_current_user_payload
+from app.core.security import get_current_user_payload
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)

@@ -5,13 +5,10 @@ import logging # Import logging
 from typing import List, Optional, Dict, Any # Add Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query, Depends # Add Depends
 
-# Import Pydantic models for Student
-# Adjust path based on your structure
-from ....models.student import Student, StudentCreate, StudentUpdate
-# Import CRUD functions for Student
-from ....db import crud # Assuming crud functions are in app/db/crud.py
-# Import the authentication dependency
-from ....core.security import get_current_user_payload # Adjust path
+# Use absolute imports from the 'app' package root
+from app.models.student import Student, StudentCreate, StudentUpdate
+from app.db import crud
+from app.core.security import get_current_user_payload
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)

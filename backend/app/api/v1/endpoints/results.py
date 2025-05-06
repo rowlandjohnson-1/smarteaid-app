@@ -6,15 +6,14 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query, Depends
 
 # Import models
-# Adjust path based on your structure
-from ....models.result import Result
-from ....models.document import Document # Needed for auth check
+from app.models.result import Result
+from app.models.document import Document # Needed for auth check
 
 # Import CRUD functions
-from ....db import crud # Assuming crud functions are in app/db/crud.py
+from app.db import crud
 
 # Import Authentication Dependency
-from ....core.security import get_current_user_payload # Adjust path
+from app.core.security import get_current_user_payload
 
 # Setup logger
 logger = logging.getLogger(__name__)

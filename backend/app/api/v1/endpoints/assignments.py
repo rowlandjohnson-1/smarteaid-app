@@ -6,15 +6,14 @@ from typing import List, Optional, Dict, Any # Add Dict, Any
 from fastapi import APIRouter, HTTPException, status, Query, Depends # Add Depends
 
 # Import Pydantic models
-# Adjust path based on your structure
-from ....models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
-from ....models.class_group import ClassGroup # Needed for auth check
+from app.models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
+from app.models.class_group import ClassGroup # Needed for auth check
 
 # Import CRUD functions
-from ....db import crud # Assuming crud functions are in app/db/crud.py
+from app.db import crud
 
 # Import the authentication dependency
-from ....core.security import get_current_user_payload # Adjust path
+from app.core.security import get_current_user_payload
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)
