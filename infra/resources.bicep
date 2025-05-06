@@ -32,6 +32,7 @@ param containerAppMinReplicas int = (environment == 'prod') ? 1 : 0
 param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
 
 // --- Secure Parameters for Secrets ---
+// These are STILL required by this module to CREATE the secrets in Key Vault
 @secure()
 @description('Required. MongoDB connection string (formerly Cosmos DB).')
 param mongoDbUrl string
@@ -75,14 +76,14 @@ var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${enviro
 var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // Uses 'stg' correctly now
 var acrLoginServer = '${acrName}.azurecr.io' // Example: acrsdtaidetectorstg.azurecr.io
 
-// Define consistent secret names
+// Define consistent secret names (used for creation in KV and referencing in ACA)
 var secretNameCosmosConnectionString = 'CosmosDbConnectionString'
 var secretNameKindeClientSecret = 'KindeClientSecret'
 var secretNameStripeSecretKey = 'StripeSecretKey'
 var secretNameStorageConnectionString = 'StorageConnectionString'
 
 // Role Definition IDs
-var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User Role ID
 var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID
 
 // --- Resource Definitions ---
@@ -107,32 +108,32 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
       name: 'standard'
     }
     tenantId: subscription().tenantId
-    enableRbacAuthorization: true
+    enableRbacAuthorization: true // RBAC must be enabled for Managed Identity access
     enablePurgeProtection: true // Keep true per policy
     softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7
   }
 
-  // --- Key Vault Secrets ---
+  // --- Key Vault Secrets (Creation using parameters) ---
   resource cosmosConnectionStringSecret 'secrets@2023-07-01' = {
-    name: secretNameCosmosConnectionString
+    name: secretNameCosmosConnectionString // Use variable for name
     properties: {
       value: mongoDbUrl
     }
   }
   resource kindeSecret 'secrets@2023-07-01' = {
-    name: secretNameKindeClientSecret
+    name: secretNameKindeClientSecret // Use variable for name
     properties: {
       value: kindeClientSecret
     }
   }
   resource stripeSecret 'secrets@2023-07-01' = {
-    name: secretNameStripeSecretKey
+    name: secretNameStripeSecretKey // Use variable for name
     properties: {
       value: stripeSecretKey
     }
   }
   resource storageConnectionStringSecret 'secrets@2023-07-01' = {
-    name: secretNameStorageConnectionString
+    name: secretNameStorageConnectionString // Use variable for name
     properties: {
       value: storageConnectionString
     }
@@ -224,42 +225,25 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       registries: [
         {
           server: acrLoginServer // Use the variable for ACR FQDN
-          identity: 'system'     // Use the system-assigned identity
+          identity: 'system'    // Use the system-assigned identity
         }
       ]
-      // secrets: [
-      //   {
-      //     name: 'aca-mongodb-url' // Internal ACA secret name
-      //     keyVaultUrl: kv.properties.vaultUri
-      //     identity: 'system'
-      //     secretName: secretNameCosmosConnectionString // Actual KV secret name: CosmosDbConnectionString
-      //   }
-      //   {
-      //     name: 'aca-kinde-client-secret'
-      //     keyVaultUrl: kv.properties.vaultUri
-      //     identity: 'system'
-      //     secretName: secretNameKindeClientSecret // Actual KV secret name: KindeClientSecret
-      //   }
-      //   {
-      //     name: 'aca-stripe-secret-key'
-      //     keyVaultUrl: kv.properties.vaultUri
-      //     identity: 'system'
-      //     secretName: secretNameStripeSecretKey // Actual KV secret name: StripeSecretKey
-      //   }
-      //   {
-      //     name: 'aca-storage-connection-string'
-      //     keyVaultUrl: kv.properties.vaultUri
-      //     identity: 'system'
-      //     secretName: secretNameStorageConnectionString // Actual KV secret name: StorageConnectionString
-      //   }
-      // ]
+
+      // MODIFIED: Define secrets block referencing Key Vault
+      // Note: We only need to list the secrets ACA needs to resolve via secretRef below.
+      // We don't map them one-to-one here, just tell ACA which KV to use.
+      secrets: [
+        // Define references that allow ACA to use the Managed Identity to access Key Vault
+        // The 'name' here is just an internal ACA identifier for the KV reference config, not used directly.
+        { name: 'keyvaultref', keyVaultUrl: kv.properties.vaultUri, identity: 'system' }
+      ]
       // ingress: { ... } // Add your ingress configuration here if needed
     }
     template: {
       containers: [
         {
           name: 'backend-api' // Container name
-          image: containerImage // Image passed from workflow
+          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           resources: {
             cpu: json(containerAppCpuCoreCount)
             memory: containerAppMemoryGiB
@@ -269,26 +253,24 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'ENVIRONMENT'
               value: environment
             }
-            // { // Temporarily remove KV name if not needed without KV refs
-            //   name: 'AZURE_KEY_VAULT_NAME'
-            //   value: kv.name
-            // }
+            // --- Secrets Referenced from Key Vault ---
             {
               name: 'MONGODB_URL'
-              value: mongoDbUrl // Use direct value from param
+              secretRef: secretNameCosmosConnectionString // References the secret NAME in Key Vault
             }
             {
               name: 'KINDE_CLIENT_SECRET'
-              value: kindeClientSecret // Use direct value from param
+              secretRef: secretNameKindeClientSecret // References the secret NAME in Key Vault
             }
             {
               name: 'STRIPE_SECRET_KEY'
-              value: stripeSecretKey // Use direct value from param
+              secretRef: secretNameStripeSecretKey // References the secret NAME in Key Vault
             }
             {
               name: 'AZURE_BLOB_CONNECTION_STRING'
-              value: storageConnectionString // Use direct value from param
+              secretRef: secretNameStorageConnectionString // References the secret NAME in Key Vault
             }
+            // --- Non-Secrets remain using 'value' ---
             {
               name: 'KINDE_DOMAIN'
               value: kindeDomain // Keep as direct value
@@ -297,6 +279,11 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'KINDE_AUDIENCE'
               value: kindeAudience // Keep as direct value
             }
+            // Optional: Add KINDE_CLIENT_ID if needed (would require adding param and passing value)
+            // {
+            //   name: 'KINDE_CLIENT_ID'
+            //   value: kindeClientId // Assuming you add a kindeClientId param
+            // }
           ]
         }
       ]
@@ -307,10 +294,10 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-  // Add explicit dependsOn for clarity
+  // MODIFIED: Add explicit dependency on Key Vault
   dependsOn: [
     cae
-    // kv // Temporarily remove kv dependency if identity and secrets are removed
+    kv // Explicitly depend on Key Vault as we reference its properties
   ]
 }
 
@@ -324,26 +311,25 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     principalType: 'ServicePrincipal'
   }
   dependsOn: [
-    ca
-    acr
+    ca // Ensure Container App and its identity exist
+    acr // Ensure ACR reference is resolved
   ]
 }
 
-// Key Vault Role Assignment for Container App
-// resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-//   // Scope directly to the Key Vault resource
-//   scope: kv
-//   name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId) // Create a unique name
-//   properties: {
-//     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-//     principalId: ca.identity.principalId // The principal ID of the Container App's Identity
-//     principalType: 'ServicePrincipal'
-//   }
-//   // Ensure Container App identity exists before assigning role
-//   dependsOn: [
-//     ca
-//   ]
-// }
+// NEW: Key Vault Role Assignment for Container App (Uncommented and verified)
+resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: kv // Scope directly to the Key Vault resource
+  name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId) // Create a unique name
+  properties: {
+    roleDefinitionId: keyVaultSecretsUserRoleDefinitionId // Use variable for Key Vault Secrets User role
+    principalId: ca.identity.principalId // The principal ID of the Container App's Identity
+    principalType: 'ServicePrincipal'
+  }
+  // Ensure Container App identity exists before assigning role
+  dependsOn: [
+    ca // Depends on Container App (which depends on KV)
+  ]
+}
 
 // --- Outputs ---
 output keyVaultName string = kv.name

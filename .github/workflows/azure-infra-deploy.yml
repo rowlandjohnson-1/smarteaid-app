@@ -12,12 +12,20 @@ on:
         type: choice
         options: # <-- Ensure this list matches your desired environment names
           - dev
-          - stg # <-- Use 'stg' consistently now
+          - staging # Changed from stg
           - prod
       image_tag:
         description: 'Docker image tag to configure (e.g., latest, commit SHA)'
         required: true
         default: 'latest' # Default value, adjust as needed
+      companyPrefix: # <-- New Input
+        description: 'Company prefix for resource names (e.g., sdt)'
+        required: true
+        default: 'sdt' # Matches default in main.bicep
+      purpose: # <-- New Input
+        description: 'Purpose of the resources (e.g., aidetector)'
+        required: true
+        default: 'aidetector' # Matches default in main.bicep
 
 # Permissions needed by the runner
 permissions:
@@ -62,11 +70,13 @@ jobs:
         echo "--- Debugging Image Name Construction ---"
         echo "Input Environment: ${{ github.event.inputs.environment }}"
         echo "Input Image Tag: ${{ github.event.inputs.image_tag }}"
+        echo "Input Company Prefix: ${{ github.event.inputs.companyPrefix }}" # <-- Debug new input
+        echo "Input Purpose: ${{ github.event.inputs.purpose }}"           # <-- Debug new input
 
-        # --- !!! IMPORTANT: ADJUST THESE VALUES IF NEEDED !!! ---
-        # This now correctly uses 'stg' when passed from the input
-        ACR_NAME="acrsdtaidetector${{ github.event.inputs.environment }}"
-        REPO_NAME="backend-api" # Example repo name in ACR
+        # --- !!! IMPORTANT: ADJUST REPO_NAME IF NEEDED !!! ---
+        # Construct ACR_NAME using the new inputs
+        ACR_NAME="acr${{ github.event.inputs.companyPrefix }}${{ github.event.inputs.purpose }}${{ github.event.inputs.environment }}"
+        REPO_NAME="backend-api" # Example repo name in ACR, ensure this is correct
         # --- !!! END OF ADJUSTABLE VALUES !!! ---
         echo "Using ACR Name: ${ACR_NAME}"
         echo "Using Repo Name: ${REPO_NAME}"
@@ -98,6 +108,8 @@ jobs:
             --location ${DEPLOYMENT_LOCATION} \
             --template-file ./infra/main.bicep \
             --parameters environment=${{ github.event.inputs.environment }} \
+            --parameters companyPrefix='${{ github.event.inputs.companyPrefix }}' \
+            --parameters purpose='${{ github.event.inputs.purpose }}' \
             --parameters containerImage='${{ steps.image_name.outputs.imageName }}' \
             --parameters mongoDbUrl='${{ secrets.MONGODB_URL }}' \
             --parameters kindeDomain='${{ secrets.KINDE_DOMAIN }}' \
@@ -107,7 +119,7 @@ jobs:
             --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
             --debug
             # Add any other parameters defined in main.bicep here if they aren't handled by defaults/conditionals
-            # e.g. --parameters companyPrefix='sdt' purpose='aidetector' location='uksouth' (if not using defaults)
+            # or if their defaults should be overridden by workflow inputs.
 
           echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
 
