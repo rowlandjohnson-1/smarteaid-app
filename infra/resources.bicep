@@ -1,8 +1,8 @@
 // -------- infra/resources.bicep --------
-// MODIFIED (v3):
-// - Removed explicit 'dependsOn' blocks from 'acrRoleAssignment' and 'kvRoleAssignment'.
-//   Dependencies should be inferred by Bicep from 'scope' and 'principalId' properties.
-//   This aims to resolve persistent BCP238 errors and align with 'no-unnecessary-dependson' warnings.
+// MODIFIED (Policy Fix):
+// - Set 'enablePurgeProtection' to true for all environments to comply with Azure Policy.
+// - Note: Soft delete is automatically enabled when purge protection is enabled.
+//   The 'softDeleteRetentionInDays' property is still relevant.
 
 @description('Company prefix for resource names.')
 param companyPrefix string
@@ -21,7 +21,7 @@ param locationShort string
 
 // --- Container App Config Parameters ---
 @description('Specifies the container image to deploy (e.g., myacr.azurecr.io/myapp:latest).')
-param containerImage string // Required: Pass this in from workflow (e.g., includes tag/SHA)
+param containerImage string
 
 @description('Specifies the CPU allocation for the container app.')
 param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
@@ -118,8 +118,8 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
-    enablePurgeProtection: (environment == 'prod')
-    softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7
+    enablePurgeProtection: true // MODIFIED: Set to true to comply with policy for all environments
+    softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7 // Keep configurable or set to a standard value like 90
   }
 
   resource cosmosConnectionStringSecret 'secrets@2023-07-01' = {
@@ -142,7 +142,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
 
 // Storage Account
 resource st 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: storageAccountName // Line 89 in user log (BCP334 warning)
+  name: storageAccountName
   location: location
   tags: {
     environment: environment
@@ -203,15 +203,15 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    managedEnvironmentId: cae.id // Implicit dependency on cae
+    managedEnvironmentId: cae.id
     configuration: {
       registries: [
         {
-          server: acrLoginServer // Implicit dependency on acr (via acrLoginServer)
+          server: acrLoginServer
           identity: 'system'
         }
       ]
-      secrets: [ // Implicit dependency on kv (via kv.properties.vaultUri)
+      secrets: [
         { name: secretNameCosmosConnectionString, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameCosmosConnectionString}', identity: 'system' }
         { name: secretNameKindeClientSecret, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameKindeClientSecret}', identity: 'system' }
         { name: secretNameStripeSecretKey, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStripeSecretKey}', identity: 'system' }
@@ -267,31 +267,26 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-  // Explicit dependsOn for cae, kv, acr removed as Bicep infers them.
 }
 
 // Role Assignment: Grant Container App AcrPull role on the ACR
-// Explicit dependsOn removed. Bicep should infer dependency on 'ca' (for principalId) and 'acr' (for scope).
-// User log error BCP238 on line 283 was related to the previous dependsOn block.
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, ca.id, acrPullRoleDefinitionId)
-  scope: acr // Dependency on 'acr' is inferred from here
+  scope: acr
   properties: {
     roleDefinitionId: acrPullRoleDefinitionId
-    principalId: ca.identity.principalId // Dependency on 'ca' is inferred from here
+    principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
 }
 
 // Role Assignment: Grant Container App Key Vault Secrets User role on the Key Vault
-// Explicit dependsOn removed. Bicep should infer dependency on 'ca' (for principalId) and 'kv' (for scope).
-// User log error BCP238 on line 300 was related to the previous dependsOn block.
 resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId)
-  scope: kv // Dependency on 'kv' is inferred from here
+  scope: kv
   properties: {
     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-    principalId: ca.identity.principalId // Dependency on 'ca' is inferred from here
+    principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
 }
