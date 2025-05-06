@@ -83,9 +83,14 @@ var secretNameStorageConnectionString = 'StorageConnectionString'
 
 // Role Definition IDs
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
-// var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID - Removed as per user request
+var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull Role ID
 
 // --- Resource Definitions ---
+
+// Add this to reference the ACR resource
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+  name: acrName // Use the variable defining your ACR name
+}
 
 // Key Vault
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -209,9 +214,9 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     application: 'SmartEducator AI Detector'
     purpose: purpose
   }
-  // identity: {
-  //   type: 'SystemAssigned' // Enable System Assigned Managed Identity
-  // }
+  identity: {
+    type: 'SystemAssigned' // Enable System Assigned Managed Identity
+  }
   properties: {
     managedEnvironmentId: cae.id // Link to the Container Apps Environment
     configuration: {
@@ -309,6 +314,21 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   ]
 }
 
+// Role Assignment: Grant Container App AcrPull role on the ACR
+resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, ca.id, acrPullRoleDefinitionId) // Unique name for the role assignment
+  scope: acr // IMPORTANT: Scope the assignment directly to the ACR resource
+  properties: {
+    roleDefinitionId: acrPullRoleDefinitionId
+    principalId: ca.identity.principalId // The Container App's Managed Identity principal ID
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    ca, // Ensure Container App and its identity exist first
+    acr // Ensure the ACR reference is resolved
+  ]
+}
+
 // Key Vault Role Assignment for Container App
 // resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 //   // Scope directly to the Key Vault resource
@@ -324,23 +344,6 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
 //     ca
 //   ]
 // }
-
-// REMOVED ACR Role Assignment - Relying on manual assignment for now
-/*
-var acrResourceId = resourceId('Microsoft.ContainerRegistry/registries', acrName)
-resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: resourceGroup()
-  name: guid(acrResourceId, ca.id, acrPullRoleDefinitionId)
-  properties: {
-    roleDefinitionId: acrPullRoleDefinitionId
-    principalId: ca.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-  dependsOn: [
-    ca
-  ]
-}
-*/
 
 // --- Outputs ---
 output keyVaultName string = kv.name
