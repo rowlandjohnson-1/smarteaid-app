@@ -15,7 +15,7 @@ param location string = 'uksouth'
 param containerImage string
 
 @description('Optional. Specifies the CPU allocation for the container app.')
-param containerAppCpuCoreCount float = (environment == 'prod') ? 1.0 : 0.5
+param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
 
 @description('Optional. Specifies the memory allocation for the container app.')
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
