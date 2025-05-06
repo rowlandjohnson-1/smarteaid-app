@@ -111,6 +111,14 @@ jobs:
             # Optionally add 'latest' tag for dev/stg/dev1 builds
             type=raw,value=latest,enable=${{ needs.determine_environment.outputs.environment == 'dev' || needs.determine_environment.outputs.environment == 'stg' || needs.determine_environment.outputs.environment == 'dev1' }}
 
+      # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
+      - name: Login to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ needs.determine_environment.outputs.acr_name }}.azurecr.io
+          username: ${{ secrets.AZURE_CLIENT_ID }}
+          password: ${{ secrets.AZURE_CLIENT_SECRET }}
+
       # Set up Docker Buildx
       - name: Set up Docker Buildx
         id: buildx 
@@ -140,14 +148,6 @@ jobs:
           echo "Buildx Platforms: ${{ steps.buildx.outputs.platforms }}"
           echo "Buildx Nodes: ${{ steps.buildx.outputs.nodes }}"
           echo "Buildx Endpoint: ${{ steps.buildx.outputs.endpoint }}"
-
-      # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
-      - name: Login to Azure Container Registry
-        uses: azure/docker-login@v1
-        with:
-          login-server: ${{ needs.determine_environment.outputs.acr_name }}.azurecr.io
-          username: ${{ secrets.AZURE_CLIENT_ID }}
-          password: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       # Build and push Docker image with Buildx (recommended for multi-platform builds if needed)
       # See https://github.com/docker/build-push-action
