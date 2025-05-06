@@ -113,12 +113,13 @@ jobs:
 
       # Set up Docker Buildx
       - name: Set up Docker Buildx
-        id: buildx # Give it an ID to reference its outputs if needed
+        id: buildx 
         uses: docker/setup-buildx-action@v3
         with:
-          driver: docker-container # Use the docker-container driver
-          use: true # Ensure this builder instance is used by subsequent steps
-          # buildkitd-flags: "--debug" # Optional: for more buildkit daemon logs
+          driver: docker-container
+          use: true
+          install: true # Ensure buildx is installed
+          endpoint: mybuilder # Define a custom endpoint/builder name
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
@@ -134,6 +135,7 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
+          builder: ${{ steps.buildx.name }} # Use the builder instance created above
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
