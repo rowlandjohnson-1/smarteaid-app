@@ -229,13 +229,32 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
 
-      // MODIFIED: Define secrets block referencing Key Vault
-      // Note: We only need to list the secrets ACA needs to resolve via secretRef below.
-      // We don't map them one-to-one here, just tell ACA which KV to use.
+      // --- REFINED CORRECTED SECRETS BLOCK ---
       secrets: [
-        // Define references that allow ACA to use the Managed Identity to access Key Vault
-        // The 'name' here is just an internal ACA identifier for the KV reference config, not used directly.
-        { name: 'keyvaultref', keyVaultUrl: kv.properties.vaultUri, identity: 'system' }
+        // For each secret you need from Key Vault, define it here.
+        // The 'name' is the internal ACA name used by secretRef.
+        // ACA implicitly uses this 'name' to look up the secret with the same name in Key Vault
+        // using the specified identity and keyVaultUrl.
+        {
+          name: secretNameCosmosConnectionString // Internal ACA Name (e.g., 'CosmosDbConnectionString')
+          keyVaultUrl: kv.properties.vaultUri   // Base Vault URL
+          identity: 'system'                    // Use system identity to access KV
+        }
+        {
+          name: secretNameKindeClientSecret     // Internal ACA Name ('KindeClientSecret')
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+        }
+        {
+          name: secretNameStripeSecretKey       // Internal ACA Name ('StripeSecretKey')
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+        }
+        {
+          name: secretNameStorageConnectionString // Internal ACA Name ('StorageConnectionString')
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+        }
       ]
       // ingress: { ... } // Add your ingress configuration here if needed
     }
