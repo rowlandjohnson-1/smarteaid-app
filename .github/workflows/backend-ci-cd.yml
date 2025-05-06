@@ -117,11 +117,19 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
-          use: true
+          use: true # Make this builder active
           install: true # Ensure buildx is installed
 
       - name: Inspect Docker Buildx builders
         run: docker buildx ls
+
+      - name: Echo Buildx context outputs
+        run: |
+          echo "Buildx Name: ${{ steps.buildx.name }}"
+          echo "Buildx Driver: ${{ steps.buildx.driver }}"
+          echo "Buildx Platforms: ${{ steps.buildx.platforms }}"
+          echo "Buildx Nodes: ${{ steps.buildx.nodes }}"
+          echo "Buildx Endpoint: ${{ steps.buildx.endpoint }}"
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
