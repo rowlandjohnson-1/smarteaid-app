@@ -324,8 +324,8 @@ resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     principalType: 'ServicePrincipal'
   }
   dependsOn: [
-    ca, // Ensure Container App and its identity exist first
-    acr // Ensure the ACR reference is resolved
+    ca
+    acr
   ]
 }
 
