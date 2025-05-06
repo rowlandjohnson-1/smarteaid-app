@@ -1,5 +1,5 @@
 // -------- infra/resources.bicep --------
-// Refreshed version for deployment into a new, clean resource group.
+// Updated to CREATE the Azure Container Registry.
 
 @description('Company prefix for resource names.')
 param companyPrefix string
@@ -8,7 +8,7 @@ param companyPrefix string
 param purpose string
 
 @description('The environment (e.g., dev, test, prod).')
-param environment string // This will be 'dev', 'stg', or 'prod'
+param environment string // This will be 'dev', 'dev1', 'stg', or 'prod'
 
 @description('Primary Azure region for resource deployment.')
 param location string
@@ -26,9 +26,8 @@ param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
 @description('Specifies the memory allocation for the container app.')
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
 
-// MODIFIED: Set minReplicas to 1 for dev to avoid KEDA issues with scale-from-zero without rules.
 @description('Minimum replicas for the container app.')
-param containerAppMinReplicas int = (environment == 'prod') ? 1 : 1
+param containerAppMinReplicas int = (environment == 'prod') ? 1 : 1 // Defaulting dev/stg/dev1 to 1
 
 @description('Maximum replicas for the container app.')
 param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
@@ -58,7 +57,7 @@ param kindeDomain string
 param kindeAudience string
 
 // --- Variables ---
-var uniqueSeed = uniqueString(resourceGroup().id) // Use resourceGroup().id for seed within RG scope
+var uniqueSeed = uniqueString(resourceGroup().id)
 var shortUniqueSeed = take(uniqueSeed, 8)
 
 var vaultEnvSuffix = (environment == 'stg') ? 'stg' : environment
@@ -70,9 +69,7 @@ var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-$
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 
-// Assuming ACR is pre-existing and in the same subscription.
-// If ACR is in a different RG, you'll need to adjust the scope for 'acr' resource.
-var acrName = toLower('acr${companyPrefix}${purpose}${environment}')
+var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // e.g., acrsdtaidetectordev1
 var acrLoginServer = '${acrName}.azurecr.io'
 
 var secretNameCosmosConnectionString = 'cosmos-db-connection-string'
@@ -80,16 +77,26 @@ var secretNameKindeClientSecret = 'kinde-client-secret'
 var secretNameStripeSecretKey = 'stripe-secret-key'
 var secretNameStorageConnectionString = 'storage-connection-string'
 
-var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
-var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d') // AcrPull
+var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 
 // --- Resource Definitions ---
 
-// Reference to an EXISTING Azure Container Registry
-// IMPORTANT: Ensure this ACR exists and is in the correct subscription.
-// If it's in a different resource group than this deployment, add: scope: resourceGroup('your-acr-resource-group-name')
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
+// MODIFIED: Create the Azure Container Registry
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
+  location: location
+  sku: {
+    name: 'Standard' // Choose Basic, Standard, or Premium
+  }
+  properties: {
+    adminUserEnabled: false // Recommended to keep false; use token/identity-based auth
+  }
+  tags: {
+    environment: environment
+    application: 'SmartEducator AI Detector'
+    purpose: purpose
+  }
 }
 
 // Key Vault
@@ -108,7 +115,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     }
     tenantId: subscription().tenantId
     enableRbacAuthorization: true
-    enablePurgeProtection: (environment == 'prod') // Typically true for prod, optional for dev/stg
+    enablePurgeProtection: (environment == 'prod')
     softDeleteRetentionInDays: (environment == 'prod') ? 90 : 7
   }
 
@@ -144,7 +151,7 @@ resource st 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   properties: {
     allowBlobPublicAccess: false
     minimumTlsVersion: 'TLS1_2'
-    isHnsEnabled: false // Set to true if ADLS Gen2 features are needed
+    isHnsEnabled: false
   }
 }
 
@@ -176,7 +183,7 @@ resource cae 'Microsoft.App/managedEnvironments@2023-05-01' = {
     purpose: purpose
   }
   properties: {
-    // zoneRedundant: (environment == 'prod') // Consider for production
+    // zoneRedundant: (environment == 'prod')
   }
 }
 
@@ -197,8 +204,8 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       registries: [
         {
-          server: acrLoginServer
-          identity: 'system' // Use system-assigned identity to pull from ACR
+          server: acrLoginServer // This will use the FQDN of the ACR created by this Bicep file
+          identity: 'system'
         }
       ]
       secrets: [
@@ -208,7 +215,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
         { name: secretNameStorageConnectionString, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStorageConnectionString}', identity: 'system' }
       ]
       ingress: {
-        external: false // Set to true for public internet access if needed
+        external: false
         targetPort: 8000 // Port your FastAPI application listens on
         transport: 'auto'
       }
@@ -216,7 +223,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     template: {
       containers: [
         {
-          name: 'backend-api' // Your container name
+          name: 'backend-api'
           image: containerImage // Uses the parameter for your application image
           resources: {
             cpu: json(containerAppCpuCoreCount)
@@ -235,7 +242,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
             {
               type: 'Liveness'
               httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 45 // Increased to allow ample startup time
+              initialDelaySeconds: 45
               periodSeconds: 30
               failureThreshold: 3
               timeoutSeconds: 10
@@ -243,54 +250,53 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
             {
               type: 'Readiness'
               httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 60 // Increased to allow ample startup and DB checks
+              initialDelaySeconds: 60
               periodSeconds: 30
               failureThreshold: 3
-              timeoutSeconds: 15 // Allow more time for readiness checks
+              timeoutSeconds: 15
             }
           ]
         }
       ]
       scale: {
-        minReplicas: containerAppMinReplicas // Will be 1 for dev
+        minReplicas: containerAppMinReplicas
         maxReplicas: containerAppMaxReplicas
       }
     }
   }
   dependsOn: [
-    cae
-    kv // Ensure Key Vault is available for secret configuration
+    cae,
+    kv,
+    acr // Add explicit dependency on ACR since the Container App will pull from it
   ]
 }
 
 // Role Assignment: Grant Container App AcrPull role on the ACR
-// This assumes 'acr' is an existing resource correctly referenced.
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, ca.id, acrPullRoleDefinitionId)
-  scope: acr // Scope to the ACR resource
+  scope: acr // Scope to the ACR resource (which is now created in this file)
   properties: {
     roleDefinitionId: acrPullRoleDefinitionId
     principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
   dependsOn: [
-    ca // Ensure Container App and its identity exist
-    // 'acr' is an existing resource, so direct dependency might not be strictly needed for ordering if ARM can resolve it,
-    // but it's good for clarity that this assignment is related to 'ca' and 'acr'.
+    ca, // Container App's identity must exist
+    acr // ACR must exist
   ]
 }
 
 // Role Assignment: Grant Container App Key Vault Secrets User role on the Key Vault
 resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId)
-  scope: kv // Scope to the Key Vault resource
+  scope: kv
   properties: {
     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
     principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
   dependsOn: [
-    ca // Ensure Container App and its identity exist (ca already depends on kv)
+    ca // Container App's identity must exist (ca already depends on kv)
   ]
 }
 
@@ -301,3 +307,5 @@ output cosmosDbAccountName string = cosmos.name
 output containerAppsEnvId string = cae.id
 output containerAppName string = ca.name
 output containerAppPrincipalId string = ca.identity.principalId
+output acrLoginServer string = acr.properties.loginServer // Output ACR login server
+output acrName string = acr.name // Output ACR name
