@@ -1,3 +1,8 @@
+// -------- infra/main.bicep --------
+// MODIFIED:
+// - Removed explicit 'dependsOn: [rg]' for the 'resources' module,
+//   as this dependency is inferred by 'scope: rg'.
+
 @description('Company prefix for resource names.')
 param companyPrefix string = 'sdt'
 
@@ -10,7 +15,7 @@ param environment string = 'dev'
 @description('Primary Azure region for resource deployment.')
 param location string = 'uksouth'
 
-// --- Add Container App Parameters needed by resources module ---
+// --- Container App Parameters needed by resources module ---
 @description('Required. Specifies the container image to deploy (e.g., myacr.azurecr.io/myapp:latest).')
 param containerImage string
 
@@ -21,13 +26,13 @@ param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
 
 @description('Optional. Minimum replicas for the container app.')
-param containerAppMinReplicas int = (environment == 'prod') ? 1 : 0
+param containerAppMinReplicas int = (environment == 'prod') ? 1 : 1 // Changed dev default from 0 to 1 to match resources.bicep
 
 @description('Optional. Maximum replicas for the container app.')
 param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
 
 
-// --- Add Secure Parameters needed by resources module ---
+// --- Secure Parameters needed by resources module ---
 @secure()
 @description('Required. MongoDB connection string (formerly Cosmos DB).')
 param mongoDbUrl string
@@ -44,7 +49,7 @@ param stripeSecretKey string
 @description('Required. Connection string for Azure Blob Storage.')
 param storageConnectionString string
 
-// --- Add Kinde non-secret parameters ---
+// --- Kinde non-secret parameters ---
 @description('Required. Kinde domain for authentication.')
 param kindeDomain string
 
@@ -56,7 +61,7 @@ param kindeAudience string
 targetScope = 'subscription'
 
 // --- Variables ---
-var locationShort = 'uks'
+var locationShort = 'uks' // Assuming 'uks' for 'uksouth'. Adjust if needed for other regions.
 var rgName = 'rg-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 
 // Resource Group
@@ -65,15 +70,15 @@ resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   location: location
   tags: {
     environment: environment
-    application: 'SmartEducator AI Detector'
+    application: 'SmartEducator AI Detector' // Consistent application tag
     purpose: purpose
   }
 }
 
 // Deploy all resources within the resource group using a module
-module resources 'resources.bicep' = {
-  name: 'resourcesDeployment-${environment}'
-  scope: rg
+module resources './resources.bicep' = { // Using relative path for the module
+  name: 'resourcesDeployment-${environment}' // Deployment name for the module
+  scope: rg // Deploys the module's resources into the 'rg' resource group
   params: {
     // Pass down standard parameters
     companyPrefix: companyPrefix
@@ -94,21 +99,21 @@ module resources 'resources.bicep' = {
     kindeClientSecret: kindeClientSecret
     stripeSecretKey: stripeSecretKey
     storageConnectionString: storageConnectionString
+
     // Pass down Kinde non-secret parameters
     kindeDomain: kindeDomain
     kindeAudience: kindeAudience
   }
-  // Explicit dependency to ensure RG exists before module deployment starts
-  dependsOn: [
-    rg
-  ]
+  // Explicit 'dependsOn: [rg]' removed as it's inferred by 'scope: rg'
 }
 
 // --- Outputs ---
 output resourceGroupName string = rg.name
 output keyVaultName string = resources.outputs.keyVaultName
 output storageAccountName string = resources.outputs.storageAccountName
-output cosmosDbAccountName string = resources.outputs.cosmosDbAccountName
+output cosmosDbAccountName string = resources.outputs.cosmosDbAccountName // Retained if still needed, though MongoDB is primary
 output containerAppsEnvId string = resources.outputs.containerAppsEnvId
-output containerAppName string = resources.outputs.containerAppName // Pass through output from module
-output containerAppPrincipalId string = resources.outputs.containerAppPrincipalId // Pass through output from module
+output containerAppName string = resources.outputs.containerAppName
+output containerAppPrincipalId string = resources.outputs.containerAppPrincipalId
+output acrLoginServer string = resources.outputs.acrLoginServer
+output acrName string = resources.outputs.acrName

@@ -1,0 +1,472 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.35.1.17967",
+      "templateHash": "13434137888374821151"
+    }
+  },
+  "parameters": {
+    "companyPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Company prefix for resource names."
+      }
+    },
+    "purpose": {
+      "type": "string",
+      "metadata": {
+        "description": "The purpose of the resources being deployed (e.g., app name)."
+      }
+    },
+    "environment": {
+      "type": "string",
+      "metadata": {
+        "description": "The environment (e.g., dev, test, prod)."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Primary Azure region for resource deployment."
+      }
+    },
+    "locationShort": {
+      "type": "string",
+      "metadata": {
+        "description": "Short location code for naming convention."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Specifies the container image to deploy (e.g., myacr.azurecr.io/myapp:latest)."
+      }
+    },
+    "containerAppCpuCoreCount": {
+      "type": "string",
+      "defaultValue": "[if(equals(parameters('environment'), 'prod'), '1.0', '0.5')]",
+      "metadata": {
+        "description": "Specifies the CPU allocation for the container app."
+      }
+    },
+    "containerAppMemoryGiB": {
+      "type": "string",
+      "defaultValue": "[if(equals(parameters('environment'), 'prod'), '2.0Gi', '1.0Gi')]",
+      "metadata": {
+        "description": "Specifies the memory allocation for the container app."
+      }
+    },
+    "containerAppMinReplicas": {
+      "type": "int",
+      "defaultValue": "[if(equals(parameters('environment'), 'prod'), 1, 1)]",
+      "metadata": {
+        "description": "Minimum replicas for the container app."
+      }
+    },
+    "containerAppMaxReplicas": {
+      "type": "int",
+      "defaultValue": "[if(equals(parameters('environment'), 'prod'), 5, 2)]",
+      "metadata": {
+        "description": "Maximum replicas for the container app."
+      }
+    },
+    "mongoDbUrl": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Required. MongoDB connection string."
+      }
+    },
+    "kindeClientSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Required. Kinde client secret for backend validation."
+      }
+    },
+    "stripeSecretKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Required. Stripe secret key."
+      }
+    },
+    "storageConnectionString": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Required. Connection string for Azure Blob Storage."
+      }
+    },
+    "kindeDomain": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Kinde domain for authentication."
+      }
+    },
+    "kindeAudience": {
+      "type": "string",
+      "metadata": {
+        "description": "Required. Kinde audience for authentication."
+      }
+    }
+  },
+  "variables": {
+    "uniqueSeed": "[uniqueString(resourceGroup().id)]",
+    "shortUniqueSeed": "[take(variables('uniqueSeed'), 8)]",
+    "vaultEnvSuffix": "[if(equals(parameters('environment'), 'stg'), 'stg', parameters('environment'))]",
+    "storageEnvSuffix": "[if(equals(parameters('environment'), 'stg'), 'stg', parameters('environment'))]",
+    "keyVaultName": "[format('kv-{0}-{1}-{2}-{3}', parameters('companyPrefix'), parameters('locationShort'), variables('vaultEnvSuffix'), variables('shortUniqueSeed'))]",
+    "storageAccountName": "[toLower(format('st{0}{1}{2}{3}{4}', parameters('companyPrefix'), parameters('locationShort'), take(parameters('purpose'), 3), variables('storageEnvSuffix'), variables('shortUniqueSeed')))]",
+    "cosmosDbAccountName": "[format('cosmos-{0}-{1}-{2}-{3}', parameters('companyPrefix'), parameters('locationShort'), parameters('purpose'), parameters('environment'))]",
+    "containerAppsEnvName": "[format('cae-{0}-{1}-{2}-{3}', parameters('companyPrefix'), parameters('locationShort'), parameters('purpose'), parameters('environment'))]",
+    "containerAppName": "[format('ca-{0}-{1}-{2}-{3}', parameters('companyPrefix'), parameters('locationShort'), parameters('purpose'), parameters('environment'))]",
+    "acrName": "[toLower(format('acr{0}{1}{2}', parameters('companyPrefix'), parameters('purpose'), parameters('environment')))]",
+    "acrLoginServer": "[format('{0}.azurecr.io', variables('acrName'))]",
+    "secretNameCosmosConnectionString": "cosmos-db-connection-string",
+    "secretNameKindeClientSecret": "kinde-client-secret",
+    "secretNameStripeSecretKey": "stripe-secret-key",
+    "secretNameStorageConnectionString": "storage-connection-string",
+    "keyVaultSecretsUserRoleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+    "acrPullRoleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), variables('secretNameCosmosConnectionString'))]",
+      "properties": {
+        "value": "[parameters('mongoDbUrl')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), variables('secretNameKindeClientSecret'))]",
+      "properties": {
+        "value": "[parameters('kindeClientSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), variables('secretNameStripeSecretKey'))]",
+      "properties": {
+        "value": "[parameters('stripeSecretKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), variables('secretNameStorageConnectionString'))]",
+      "properties": {
+        "value": "[parameters('storageConnectionString')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('acrName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "adminUserEnabled": false
+      },
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      }
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      },
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enablePurgeProtection": "[equals(parameters('environment'), 'prod')]",
+        "softDeleteRetentionInDays": "[if(equals(parameters('environment'), 'prod'), 90, 7)]"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-01-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      },
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "allowBlobPublicAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "isHnsEnabled": false
+      }
+    },
+    {
+      "type": "Microsoft.DocumentDB/databaseAccounts",
+      "apiVersion": "2023-11-15",
+      "name": "[variables('cosmosDbAccountName')]",
+      "location": "[parameters('location')]",
+      "kind": "MongoDB",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      },
+      "properties": {
+        "databaseAccountOfferType": "Standard",
+        "locations": [
+          {
+            "locationName": "[parameters('location')]",
+            "failoverPriority": 0
+          }
+        ],
+        "capabilities": [
+          {
+            "name": "EnableMongo"
+          },
+          {
+            "name": "EnableServerless"
+          }
+        ],
+        "consistencyPolicy": {
+          "defaultConsistencyLevel": "Session"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('containerAppsEnvName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('containerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "environment": "[parameters('environment')]",
+        "application": "SmartEducator AI Detector",
+        "purpose": "[parameters('purpose')]"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[variables('acrLoginServer')]",
+              "identity": "system"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "[variables('secretNameCosmosConnectionString')]",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri, variables('secretNameCosmosConnectionString'))]",
+              "identity": "system"
+            },
+            {
+              "name": "[variables('secretNameKindeClientSecret')]",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri, variables('secretNameKindeClientSecret'))]",
+              "identity": "system"
+            },
+            {
+              "name": "[variables('secretNameStripeSecretKey')]",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri, variables('secretNameStripeSecretKey'))]",
+              "identity": "system"
+            },
+            {
+              "name": "[variables('secretNameStorageConnectionString')]",
+              "keyVaultUrl": "[format('{0}secrets/{1}', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri, variables('secretNameStorageConnectionString'))]",
+              "identity": "system"
+            }
+          ],
+          "ingress": {
+            "external": false,
+            "targetPort": 8000,
+            "transport": "auto"
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "backend-api",
+              "image": "[parameters('containerImage')]",
+              "resources": {
+                "cpu": "[json(parameters('containerAppCpuCoreCount'))]",
+                "memory": "[parameters('containerAppMemoryGiB')]"
+              },
+              "env": [
+                {
+                  "name": "ENVIRONMENT",
+                  "value": "[parameters('environment')]"
+                },
+                {
+                  "name": "MONGODB_URL",
+                  "secretRef": "[variables('secretNameCosmosConnectionString')]"
+                },
+                {
+                  "name": "KINDE_CLIENT_SECRET",
+                  "secretRef": "[variables('secretNameKindeClientSecret')]"
+                },
+                {
+                  "name": "STRIPE_SECRET_KEY",
+                  "secretRef": "[variables('secretNameStripeSecretKey')]"
+                },
+                {
+                  "name": "AZURE_BLOB_CONNECTION_STRING",
+                  "secretRef": "[variables('secretNameStorageConnectionString')]"
+                },
+                {
+                  "name": "KINDE_DOMAIN",
+                  "value": "[parameters('kindeDomain')]"
+                },
+                {
+                  "name": "KINDE_AUDIENCE",
+                  "value": "[parameters('kindeAudience')]"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": 8000,
+                    "scheme": "HTTP"
+                  },
+                  "initialDelaySeconds": 45,
+                  "periodSeconds": 30,
+                  "failureThreshold": 3,
+                  "timeoutSeconds": 10
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 8000,
+                    "scheme": "HTTP"
+                  },
+                  "initialDelaySeconds": 60,
+                  "periodSeconds": 30,
+                  "failureThreshold": 3,
+                  "timeoutSeconds": 15
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": "[parameters('containerAppMinReplicas')]",
+            "maxReplicas": "[parameters('containerAppMaxReplicas')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.ContainerRegistry/registries/{0}', variables('acrName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), resourceId('Microsoft.App/containerApps', variables('containerAppName')), variables('acrPullRoleDefinitionId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2023-05-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.KeyVault/vaults/{0}', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.App/containerApps', variables('containerAppName')), variables('keyVaultSecretsUserRoleDefinitionId'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultSecretsUserRoleDefinitionId')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2023-05-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "cosmosDbAccountName": {
+      "type": "string",
+      "value": "[variables('cosmosDbAccountName')]"
+    },
+    "containerAppsEnvId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvName'))]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[variables('containerAppName')]"
+    },
+    "containerAppPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2023-05-01', 'full').identity.principalId]"
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[variables('acrName')]"
+    }
+  }
+}

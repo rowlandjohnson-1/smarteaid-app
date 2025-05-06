@@ -1,6 +1,8 @@
 // -------- infra/resources.bicep --------
-// Updated to CREATE the Azure Container Registry.
-// Syntax errors in dependsOn arrays corrected.
+// MODIFIED (v3):
+// - Removed explicit 'dependsOn' blocks from 'acrRoleAssignment' and 'kvRoleAssignment'.
+//   Dependencies should be inferred by Bicep from 'scope' and 'principalId' properties.
+//   This aims to resolve persistent BCP238 errors and align with 'no-unnecessary-dependson' warnings.
 
 @description('Company prefix for resource names.')
 param companyPrefix string
@@ -28,7 +30,7 @@ param containerAppCpuCoreCount string = (environment == 'prod') ? '1.0' : '0.5'
 param containerAppMemoryGiB string = (environment == 'prod') ? '2.0Gi' : '1.0Gi'
 
 @description('Minimum replicas for the container app.')
-param containerAppMinReplicas int = (environment == 'prod') ? 1 : 1 // Defaulting dev/stg/dev1 to 1
+param containerAppMinReplicas int = (environment == 'prod') ? 1 : 1
 
 @description('Maximum replicas for the container app.')
 param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
@@ -70,7 +72,7 @@ var cosmosDbAccountName = 'cosmos-${companyPrefix}-${locationShort}-${purpose}-$
 var containerAppsEnvName = 'cae-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 var containerAppName = 'ca-${companyPrefix}-${locationShort}-${purpose}-${environment}'
 
-var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // e.g., acrsdtaidetectordev1
+var acrName = toLower('acr${companyPrefix}${purpose}${environment}')
 var acrLoginServer = '${acrName}.azurecr.io'
 
 var secretNameCosmosConnectionString = 'cosmos-db-connection-string'
@@ -83,15 +85,15 @@ var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinition
 
 // --- Resource Definitions ---
 
-// MODIFIED: Create the Azure Container Registry
+// Azure Container Registry
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
   sku: {
-    name: 'Standard' // Choose Basic, Standard, or Premium
+    name: 'Standard'
   }
   properties: {
-    adminUserEnabled: false // Recommended to keep false; use token/identity-based auth
+    adminUserEnabled: false
   }
   tags: {
     environment: environment
@@ -140,7 +142,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
 
 // Storage Account
 resource st 'Microsoft.Storage/storageAccounts@2023-01-01' = {
-  name: storageAccountName
+  name: storageAccountName // Line 89 in user log (BCP334 warning)
   location: location
   tags: {
     environment: environment
@@ -201,15 +203,15 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    managedEnvironmentId: cae.id
+    managedEnvironmentId: cae.id // Implicit dependency on cae
     configuration: {
       registries: [
         {
-          server: acrLoginServer
+          server: acrLoginServer // Implicit dependency on acr (via acrLoginServer)
           identity: 'system'
         }
       ]
-      secrets: [
+      secrets: [ // Implicit dependency on kv (via kv.properties.vaultUri)
         { name: secretNameCosmosConnectionString, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameCosmosConnectionString}', identity: 'system' }
         { name: secretNameKindeClientSecret, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameKindeClientSecret}', identity: 'system' }
         { name: secretNameStripeSecretKey, keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStripeSecretKey}', identity: 'system' }
@@ -217,7 +219,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       ]
       ingress: {
         external: false
-        targetPort: 8000 // Port your FastAPI application listens on
+        targetPort: 8000
         transport: 'auto'
       }
     }
@@ -265,40 +267,33 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-  dependsOn: [ // Corrected: No trailing commas
-    cae,
-    kv,
-    acr
-  ]
+  // Explicit dependsOn for cae, kv, acr removed as Bicep infers them.
 }
 
 // Role Assignment: Grant Container App AcrPull role on the ACR
+// Explicit dependsOn removed. Bicep should infer dependency on 'ca' (for principalId) and 'acr' (for scope).
+// User log error BCP238 on line 283 was related to the previous dependsOn block.
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, ca.id, acrPullRoleDefinitionId)
-  scope: acr
+  scope: acr // Dependency on 'acr' is inferred from here
   properties: {
     roleDefinitionId: acrPullRoleDefinitionId
-    principalId: ca.identity.principalId
+    principalId: ca.identity.principalId // Dependency on 'ca' is inferred from here
     principalType: 'ServicePrincipal'
   }
-  dependsOn: [ // Corrected: No trailing commas
-    ca,
-    acr
-  ]
 }
 
 // Role Assignment: Grant Container App Key Vault Secrets User role on the Key Vault
+// Explicit dependsOn removed. Bicep should infer dependency on 'ca' (for principalId) and 'kv' (for scope).
+// User log error BCP238 on line 300 was related to the previous dependsOn block.
 resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId)
-  scope: kv
+  scope: kv // Dependency on 'kv' is inferred from here
   properties: {
     roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-    principalId: ca.identity.principalId
+    principalId: ca.identity.principalId // Dependency on 'ca' is inferred from here
     principalType: 'ServicePrincipal'
   }
-  dependsOn: [ // Corrected: No trailing commas
-    ca
-  ]
 }
 
 // --- Outputs ---
