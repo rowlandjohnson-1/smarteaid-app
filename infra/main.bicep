@@ -122,3 +122,4 @@ output containerAppName string = resources.outputs.containerAppName
 output containerAppPrincipalId string = resources.outputs.containerAppPrincipalId
 output acrLoginServer string = resources.outputs.acrLoginServer
 output acrName string = resources.outputs.acrName
+#
