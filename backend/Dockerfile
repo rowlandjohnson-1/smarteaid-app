@@ -7,10 +7,14 @@ WORKDIR /app
 
 # Prevent python from writing pyc files to disc
 # and prevent buffering stdout and stderr.
-# Added PIP environment variables for better control.
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-ENV PIP_NO_CACHE_DIR=off       # Disable pip cache (can be 'on' to speed up subsequent builds if requirements don't change often)
+# Use KEY=VALUE format for ENV instructions.
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# PIP environment variables for better control.
+# Comment is on a separate line to avoid parsing issues.
+ENV PIP_NO_CACHE_DIR=off
+# Disables pip cache (can be 'on' to speed up subsequent builds if requirements don't change often)
 ENV PIP_DISABLE_PIP_VERSION_CHECK=on
 ENV PIP_DEFAULT_TIMEOUT=100
 
