@@ -119,17 +119,21 @@ jobs:
           driver: docker-container
           use: true # Make this builder active
           install: true # Ensure buildx is installed
+          driver-opts: |
+            image=moby/buildkit:master
+            network=host
+          # The builder name will be available in steps.buildx.outputs.name
 
       - name: Inspect Docker Buildx builders
         run: docker buildx ls
 
       - name: Echo Buildx context outputs
         run: |
-          echo "Buildx Name: ${{ steps.buildx.name }}"
-          echo "Buildx Driver: ${{ steps.buildx.driver }}"
-          echo "Buildx Platforms: ${{ steps.buildx.platforms }}"
-          echo "Buildx Nodes: ${{ steps.buildx.nodes }}"
-          echo "Buildx Endpoint: ${{ steps.buildx.endpoint }}"
+          echo "Buildx Name: ${{ steps.buildx.outputs.name }}"
+          echo "Buildx Driver: ${{ steps.buildx.outputs.driver }}"
+          echo "Buildx Platforms: ${{ steps.buildx.outputs.platforms }}"
+          echo "Buildx Nodes: ${{ steps.buildx.outputs.nodes }}"
+          echo "Buildx Endpoint: ${{ steps.buildx.outputs.endpoint }}"
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
@@ -145,6 +149,7 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
+          builder: ${{ steps.buildx.outputs.name }}
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
