@@ -1,23 +1,25 @@
-# .github/workflows/azure-infra-deploy.yml
-
-name: Deploy Azure Infrastructure
+name: Build and Deploy Backend API
 
 on:
+  push:
+    branches:
+      - main # Trigger dev1 on push to main
+  tags:
+    - 'v*.*.*' # Trigger prod on version tags (e.g., v1.0.0)
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment (dev, dev1, staging, prod)'
+        description: 'Target environment (dev1, dev, stg, prod)'
         required: true
         type: choice
         options:
-          - dev
           - dev1
-          - staging
+          - dev
+          - stg
           - prod
       image_tag:
-        description: 'Docker image tag to configure (e.g., latest, commit SHA, or placeholder-for-infra-deploy)'
-        required: true
-        default: 'latest'
+        description: 'Optional: Specific tag to build/deploy (overrides default)'
+        required: false
       companyPrefix:
         description: 'Company prefix for resource names (e.g., sdt)'
         required: true
@@ -26,89 +28,168 @@ on:
         description: 'Purpose of the resources (e.g., aidetector)'
         required: true
         default: 'aidetector'
-      deploymentSuffix: # <-- NEW INPUT
-        description: 'A unique suffix for the Bicep module deployment name (e.g., from pipeline run ID or timestamp)'
-        required: true # Make this required as main.bicep needs it
 
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  deploy_infrastructure:
-    name: Deploy Infra to ${{ github.event.inputs.environment }}
+  determine_config:
+    name: Determine Config (Env, Tag, ACR, Suffix)
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    outputs:
+      environment: ${{ steps.set_env.outputs.environment }}
+      image_tag: ${{ steps.set_tag.outputs.image_tag }}
+      acr_name: ${{ steps.set_acr.outputs.acr_name }}
+      repo_name: backend-api # Hardcoded repo name
+      companyPrefix: ${{ steps.set_inputs.outputs.companyPrefix }}
+      purpose: ${{ steps.set_inputs.outputs.purpose }}
+      deployment_suffix: ${{ steps.set_suffix.outputs.deployment_suffix }}
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Set Workflow Inputs as Outputs
+        id: set_inputs
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "companyPrefix=${{ github.event.inputs.companyPrefix }}" >> $GITHUB_OUTPUT
+            echo "purpose=${{ github.event.inputs.purpose }}" >> $GITHUB_OUTPUT
+          else
+            echo "companyPrefix=sdt" >> $GITHUB_OUTPUT # Default for non-dispatch
+            echo "purpose=aidetector" >> $GITHUB_OUTPUT # Default for non-dispatch
+          fi
 
-    - name: Login to Azure
-      uses: azure/login@v1
-      with:
-        creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
-        enable-AzPSSession: false
+      - name: Set Environment based on Trigger
+        id: set_env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=dev1" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          else
+            # Defaulting to dev1 for other push/trigger events for safety
+            echo "Unsupported trigger ref: ${{ github.ref }}. Defaulting to dev1."
+            echo "environment=dev1" >> $GITHUB_OUTPUT
+          fi
 
-    - name: Install/Verify Bicep CLI
-      run: |
-        echo "Attempting to ensure Bicep CLI is available..."
-        az bicep install
-        az bicep version
-      continue-on-error: true
+      - name: Set Image Tag
+        id: set_tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.image_tag }}" != "" ]]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
+            TAG_NAME=$(echo "${{ github.ref }}" | sed 's#refs/tags/##')
+            echo "image_tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "image_tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
 
-    - name: Set Image Name variable
-      id: image_name
-      run: |
-        ACR_NAME_LOWER=$(echo "acr${{ github.event.inputs.companyPrefix }}${{ github.event.inputs.purpose }}${{ github.event.inputs.environment }}" | tr '[:upper:]' '[:lower:]')
-        REPO_NAME="backend-api" # Ensure this is your correct repository name in ACR
-        TAG="${{ github.event.inputs.image_tag }}"
-        
-        FULL_IMAGE_NAME="${ACR_NAME_LOWER}.azurecr.io/${REPO_NAME}:${TAG}"
-        echo "Constructed image name: ${FULL_IMAGE_NAME}"
-        echo "imageName=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
-      shell: bash
+      - name: Set ACR Name
+        id: set_acr
+        run: |
+          COMPANY_PREFIX_LOWER=$(echo "${{ steps.set_inputs.outputs.companyPrefix }}" | tr '[:upper:]' '[:lower:]')
+          PURPOSE_LOWER=$(echo "${{ steps.set_inputs.outputs.purpose }}" | tr '[:upper:]' '[:lower:]')
+          ENVIRONMENT_LOWER=$(echo "${{ steps.set_env.outputs.environment }}" | tr '[:upper:]' '[:lower:]')
+          ACR_NAME="acr${COMPANY_PREFIX_LOWER}${PURPOSE_LOWER}${ENVIRONMENT_LOWER}"
+          echo "ACR Name for environment ${{ steps.set_env.outputs.environment }}: ${ACR_NAME}"
+          echo "acr_name=${ACR_NAME}" >> $GITHUB_OUTPUT
+      
+      - name: Set Deployment Suffix
+        id: set_suffix
+        run: |
+          # Generates a unique suffix: timestamp-runid-runattempt
+          SUFFIX_VALUE="$(date +%Y%m%d%H%M%S)-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "Generated Deployment Suffix: ${SUFFIX_VALUE}"
+          echo "deployment_suffix=${SUFFIX_VALUE}" >> $GITHUB_OUTPUT
 
-    - name: Deploy Bicep File
-      uses: azure/cli@v1
-      with:
-        inlineScript: |
-          echo "Starting Bicep deployment for environment: ${{ github.event.inputs.environment }}"
-          echo "Using container image: ${{ steps.image_name.outputs.imageName }}"
-          echo "Using deployment suffix: ${{ github.event.inputs.deploymentSuffix }}"
+  deploy_foundational_infra:
+    name: Deploy Foundational Infra (inc. ACR)
+    needs: determine_config
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine_config.outputs.environment }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
-          DEPLOYMENT_LOCATION="uksouth" 
+      - name: Trigger Infrastructure Deployment (creates ACR)
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: azure-infra-deploy.yml
+          ref: ${{ github.ref }}
+          inputs: >
+            {
+              "environment": "${{ needs.determine_config.outputs.environment }}",
+              "image_tag": "placeholder-for-infra-deploy",
+              "companyPrefix": "${{ needs.determine_config.outputs.companyPrefix }}",
+              "purpose": "${{ needs.determine_config.outputs.purpose }}",
+              "deploymentSuffix": "${{ needs.determine_config.outputs.deployment_suffix }}"
+            }
+          token: ${{ secrets.PAT_TOKEN }}
 
-          az deployment sub create \
-            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}" \
-            --location ${DEPLOYMENT_LOCATION} \
-            --template-file ./infra/main.bicep \
-            --parameters environment=${{ github.event.inputs.environment }} \
-            --parameters companyPrefix='${{ github.event.inputs.companyPrefix }}' \
-            --parameters purpose='${{ github.event.inputs.purpose }}' \
-            --parameters containerImage='${{ steps.image_name.outputs.imageName }}' \
-            --parameters mongoDbUrl='${{ secrets.MONGODB_URL }}' \
-            --parameters kindeDomain='${{ secrets.KINDE_DOMAIN }}' \
-            --parameters kindeAudience='${{ secrets.KINDE_AUDIENCE }}' \
-            --parameters kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
-            --parameters stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
-            --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
-            --parameters deploymentSuffix='${{ github.event.inputs.deploymentSuffix }}' \
-            --debug
+  build_and_push:
+    name: Build and Push Docker Image
+    needs: [determine_config, deploy_foundational_infra]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine_config.outputs.environment }}
+    outputs:
+      image_name_with_tag: ${{ steps.meta.outputs.tags }}
 
-          echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Verify Azure Login Identity
-      run: |
-        echo "Checking logged in Azure CLI identity..."
-        az account show --query user --output table
-        echo "Checking logged in Service Principal (if applicable)..."
-        az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
-        # Ensure AZURE_CLIENT_ID secret is available if this check is important
-        # az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
-      shell: bash
-      if: always()
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ needs.determine_config.outputs.acr_name }}.azurecr.io/${{ needs.determine_config.outputs.repo_name }}
+          tags: |
+            ${{ needs.determine_config.outputs.image_tag }}
+            type=raw,value=latest,enable=${{ needs.determine_config.outputs.environment == 'dev' || needs.determine_config.outputs.environment == 'stg' || needs.determine_config.outputs.environment == 'dev1' }}
 
-    - name: Azure Logout
-      run: az logout
-      if: always()
+      - name: Login to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ needs.determine_config.outputs.acr_name }}.azurecr.io
+          username: ${{ secrets.AZURE_CLIENT_ID }}
+          password: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy_container_app_update:
+    name: Deploy/Update Container App
+    needs: [determine_config, build_and_push]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.determine_config.outputs.environment }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Trigger Infrastructure Deployment (updates/creates Container App)
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: azure-infra-deploy.yml
+          ref: ${{ github.ref }}
+          inputs: >
+            {
+              "environment": "${{ needs.determine_config.outputs.environment }}",
+              "image_tag": "${{ needs.determine_config.outputs.image_tag }}",
+              "companyPrefix": "${{ needs.determine_config.outputs.companyPrefix }}",
+              "purpose": "${{ needs.determine_config.outputs.purpose }}",
+              "deploymentSuffix": "${{ needs.determine_config.outputs.deployment_suffix }}"
+            }
+          token: ${{ secrets.PAT_TOKEN }}
