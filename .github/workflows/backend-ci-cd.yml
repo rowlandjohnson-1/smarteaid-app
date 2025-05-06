@@ -3,193 +3,156 @@ name: Build and Deploy Backend API
 on:
   push:
     branches:
-      - main # Trigger dev1 on push to main
-  tags:
-    - 'v*.*.*' # Trigger prod on version tags (e.g., v1.0.0)
-  workflow_dispatch:
+      - main # Trigger dev/stg on push to main
+      # Add other branches if needed, e.g., 'develop'
+    tags:
+      - 'v*.*.*' # Trigger prod on version tags (e.g., v1.0.0)
+  workflow_dispatch: # Allow manual trigger
     inputs:
       environment:
-        description: 'Target environment (dev1, dev, stg, prod)'
+        description: 'Target environment (dev, stg, prod, dev1)'
         required: true
         type: choice
         options:
-          - dev1
           - dev
           - stg
           - prod
+          - dev1
       image_tag:
         description: 'Optional: Specific tag to build/deploy (overrides default)'
         required: false
-      companyPrefix:
-        description: 'Company prefix for resource names (e.g., sdt)'
-        required: true
-        default: 'sdt'
-      purpose:
-        description: 'Purpose of the resources (e.g., aidetector)'
-        required: true
-        default: 'aidetector'
 
 permissions:
-  id-token: write
-  contents: read
+  id-token: write # Required for azure/login when using OIDC (though we use SP secret here)
+  contents: read  # Required to checkout the code
 
 jobs:
-  determine_config:
-    name: Determine Config (Env, Tag, ACR, Suffix)
+  determine_environment:
+    name: Determine Environment & Tag
     runs-on: ubuntu-latest
     outputs:
       environment: ${{ steps.set_env.outputs.environment }}
       image_tag: ${{ steps.set_tag.outputs.image_tag }}
       acr_name: ${{ steps.set_acr.outputs.acr_name }}
-      repo_name: backend-api # Hardcoded repo name
-      companyPrefix: ${{ steps.set_inputs.outputs.companyPrefix }}
-      purpose: ${{ steps.set_inputs.outputs.purpose }}
-      deployment_suffix: ${{ steps.set_suffix.outputs.deployment_suffix }}
-
+      repo_name: backend-api # Hardcode repo name for simplicity
     steps:
-      - name: Set Workflow Inputs as Outputs
-        id: set_inputs
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "companyPrefix=${{ github.event.inputs.companyPrefix }}" >> $GITHUB_OUTPUT
-            echo "purpose=${{ github.event.inputs.purpose }}" >> $GITHUB_OUTPUT
-          else
-            echo "companyPrefix=sdt" >> $GITHUB_OUTPUT # Default for non-dispatch
-            echo "purpose=aidetector" >> $GITHUB_OUTPUT # Default for non-dispatch
-          fi
-
       - name: Set Environment based on Trigger
         id: set_env
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Pushes to main now go to dev1
             echo "environment=dev1" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
             echo "environment=prod" >> $GITHUB_OUTPUT
           else
-            # Defaulting to dev1 for other push/trigger events for safety
             echo "Unsupported trigger ref: ${{ github.ref }}. Defaulting to dev1."
-            echo "environment=dev1" >> $GITHUB_OUTPUT
+            echo "environment=dev1" >> $GITHUB_OUTPUT # Defaulting to dev1 for other cases too
           fi
 
       - name: Set Image Tag
         id: set_tag
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.image_tag }}" != "" ]]; then
+          if [[ "${{ github.event.inputs.image_tag }}" != "" ]]; then
+            echo "Using manual input tag: ${{ github.event.inputs.image_tag }}"
             echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
             TAG_NAME=$(echo "${{ github.ref }}" | sed 's#refs/tags/##')
+            echo "Using Git tag: ${TAG_NAME}"
             echo "image_tag=${TAG_NAME}" >> $GITHUB_OUTPUT
           else
+            # Use commit SHA for dev/stg builds for uniqueness
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            echo "Using commit SHA tag: ${SHORT_SHA}"
             echo "image_tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+            # Alternatively, use 'latest' for dev/stg if preferred:
+            # echo "image_tag=latest" >> $GITHUB_OUTPUT
           fi
 
       - name: Set ACR Name
         id: set_acr
         run: |
-          COMPANY_PREFIX_LOWER=$(echo "${{ steps.set_inputs.outputs.companyPrefix }}" | tr '[:upper:]' '[:lower:]')
-          PURPOSE_LOWER=$(echo "${{ steps.set_inputs.outputs.purpose }}" | tr '[:upper:]' '[:lower:]')
-          ENVIRONMENT_LOWER=$(echo "${{ steps.set_env.outputs.environment }}" | tr '[:upper:]' '[:lower:]')
-          ACR_NAME="acr${COMPANY_PREFIX_LOWER}${PURPOSE_LOWER}${ENVIRONMENT_LOWER}"
+          # --- !!! IMPORTANT: Ensure this matches your ACR naming !!! ---
+          COMPANY_PREFIX="sdt"    # Your company prefix
+          PURPOSE="aidetector" # Your purpose
+          # ---
+          ACR_NAME="acr${COMPANY_PREFIX}${PURPOSE}${ENVIRONMENT}"
           echo "ACR Name for environment ${{ steps.set_env.outputs.environment }}: ${ACR_NAME}"
           echo "acr_name=${ACR_NAME}" >> $GITHUB_OUTPUT
-      
-      - name: Set Deployment Suffix
-        id: set_suffix
-        run: |
-          # Generates a unique suffix: timestamp-runid-runattempt
-          SUFFIX_VALUE="$(date +%Y%m%d%H%M%S)-${{ github.run_id }}-${{ github.run_attempt }}"
-          echo "Generated Deployment Suffix: ${SUFFIX_VALUE}"
-          echo "deployment_suffix=${SUFFIX_VALUE}" >> $GITHUB_OUTPUT
+        env:
+          ENVIRONMENT: ${{ steps.set_env.outputs.environment }}
 
-  deploy_foundational_infra:
-    name: Deploy Foundational Infra (inc. ACR)
-    needs: determine_config
-    runs-on: ubuntu-latest
-    environment: ${{ needs.determine_config.outputs.environment }}
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
-      - name: Trigger Infrastructure Deployment (creates ACR)
-        uses: benc-uk/workflow-dispatch@v1
-        with:
-          workflow: azure-infra-deploy.yml
-          ref: ${{ github.ref }}
-          inputs: |
-            {
-              "environment": "${{ needs.determine_config.outputs.environment }}",
-              "image_tag": "placeholder-for-infra-deploy",
-              "companyPrefix": "${{ needs.determine_config.outputs.companyPrefix }}",
-              "purpose": "${{ needs.determine_config.outputs.purpose }}",
-              "deploymentSuffix": "${{ needs.determine_config.outputs.deployment_suffix }}"
-            }
-          token: ${{ secrets.PAT_TOKEN }}
 
   build_and_push:
     name: Build and Push Docker Image
-    needs: [determine_config, deploy_foundational_infra]
+    needs: determine_environment # Depends on the previous job
     runs-on: ubuntu-latest
-    environment: ${{ needs.determine_config.outputs.environment }}
+    # Link to the GitHub Environment to get secrets for ACR login
+    environment: ${{ needs.determine_environment.outputs.environment }}
+    # Set outputs for the next job
     outputs:
-      image_name_with_tag: ${{ steps.meta.outputs.tags }}
+      image_name: ${{ steps.meta.outputs.tags }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # Add Docker metadata (tags, labels)
+      # See https://github.com/docker/metadata-action
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ needs.determine_config.outputs.acr_name }}.azurecr.io/${{ needs.determine_config.outputs.repo_name }}
+          images: ${{ needs.determine_environment.outputs.acr_name }}.azurecr.io/${{ needs.determine_environment.outputs.repo_name }}
           tags: |
-            ${{ needs.determine_config.outputs.image_tag }}
-            type=raw,value=latest,enable=${{ needs.determine_config.outputs.environment == 'dev' || needs.determine_config.outputs.environment == 'stg' || needs.determine_config.outputs.environment == 'dev1' }}
+            # Use the specific tag determined in the previous job
+            ${{ needs.determine_environment.outputs.image_tag }}
+            # Optionally add 'latest' tag for dev/stg/dev1 builds
+            type=raw,value=latest,enable=${{ needs.determine_environment.outputs.environment == 'dev' || needs.determine_environment.outputs.environment == 'stg' || needs.determine_environment.outputs.environment == 'dev1' }}
 
+      # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
         uses: azure/docker-login@v1
         with:
-          login-server: ${{ needs.determine_config.outputs.acr_name }}.azurecr.io
+          login-server: ${{ needs.determine_environment.outputs.acr_name }}.azurecr.io
           username: ${{ secrets.AZURE_CLIENT_ID }}
           password: ${{ secrets.AZURE_CLIENT_SECRET }}
 
+      # Build and push Docker image with Buildx (recommended for multi-platform builds if needed)
+      # See https://github.com/docker/build-push-action
       - name: Build and push Docker image
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
+          context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  deploy_container_app_update:
-    name: Deploy/Update Container App
-    needs: [determine_config, build_and_push]
+
+  deploy_to_aca:
+    name: Deploy to Azure Container Apps
+    needs: [determine_environment, build_and_push] # Depends on previous jobs
     runs-on: ubuntu-latest
-    environment: ${{ needs.determine_config.outputs.environment }}
+    # Link to the GitHub Environment for secrets needed by azure-infra-deploy.yml
+    environment: ${{ needs.determine_environment.outputs.environment }}
 
     steps:
+      # 1. Checkout repository code to access the infra deployment workflow file
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.ref }} # Checkout the same ref that triggered the workflow
 
-      - name: Trigger Infrastructure Deployment (updates/creates Container App)
-        uses: benc-uk/workflow-dispatch@v1
+      # 2. Trigger the Infrastructure Deployment Workflow
+      #    This reuses the existing workflow, passing the specific image tag
+      - name: Trigger Infrastructure Deployment
+        uses: benc-uk/workflow-dispatch@v1 # Action to trigger another workflow
         with:
-          workflow: azure-infra-deploy.yml
-          ref: ${{ github.ref }}
-          inputs: |
-            {
-              "environment": "${{ needs.determine_config.outputs.environment }}",
-              "image_tag": "${{ needs.determine_config.outputs.image_tag }}",
-              "companyPrefix": "${{ needs.determine_config.outputs.companyPrefix }}",
-              "purpose": "${{ needs.determine_config.outputs.purpose }}",
-              "deploymentSuffix": "${{ needs.determine_config.outputs.deployment_suffix }}"
-            }
-          token: ${{ secrets.PAT_TOKEN }}
+          workflow: azure-infra-deploy.yml # Name of the workflow file to trigger
+          ref: ${{ github.ref }} # Trigger on the same branch/tag
+          inputs: '{ "environment": "${{ needs.determine_environment.outputs.environment }}", "image_tag": "${{ needs.determine_environment.outputs.image_tag }}" }'
+          token: ${{ secrets.PAT_TOKEN }} # A Personal Access Token with repo/workflow scope is needed
