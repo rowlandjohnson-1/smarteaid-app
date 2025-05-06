@@ -145,7 +145,6 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          builder: ${{ steps.buildx.name }} # Explicitly use the builder instance created by setup-buildx-action
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
