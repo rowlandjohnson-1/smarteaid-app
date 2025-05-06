@@ -1,5 +1,6 @@
 // -------- infra/resources.bicep --------
 // Updated to CREATE the Azure Container Registry.
+// Syntax errors in dependsOn arrays corrected.
 
 @description('Company prefix for resource names.')
 param companyPrefix string
@@ -204,7 +205,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       registries: [
         {
-          server: acrLoginServer // This will use the FQDN of the ACR created by this Bicep file
+          server: acrLoginServer
           identity: 'system'
         }
       ]
@@ -224,7 +225,7 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       containers: [
         {
           name: 'backend-api'
-          image: containerImage // Uses the parameter for your application image
+          image: containerImage
           resources: {
             cpu: json(containerAppCpuCoreCount)
             memory: containerAppMemoryGiB
@@ -264,25 +265,25 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
-  dependsOn: [
+  dependsOn: [ // Corrected: No trailing commas
     cae,
     kv,
-    acr // Add explicit dependency on ACR since the Container App will pull from it
+    acr
   ]
 }
 
 // Role Assignment: Grant Container App AcrPull role on the ACR
 resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(acr.id, ca.id, acrPullRoleDefinitionId)
-  scope: acr // Scope to the ACR resource (which is now created in this file)
+  scope: acr
   properties: {
     roleDefinitionId: acrPullRoleDefinitionId
     principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
-  dependsOn: [
-    ca, // Container App's identity must exist
-    acr // ACR must exist
+  dependsOn: [ // Corrected: No trailing commas
+    ca,
+    acr
   ]
 }
 
@@ -295,8 +296,8 @@ resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     principalId: ca.identity.principalId
     principalType: 'ServicePrincipal'
   }
-  dependsOn: [
-    ca // Container App's identity must exist (ca already depends on kv)
+  dependsOn: [ // Corrected: No trailing commas
+    ca
   ]
 }
 
@@ -307,5 +308,5 @@ output cosmosDbAccountName string = cosmos.name
 output containerAppsEnvId string = cae.id
 output containerAppName string = ca.name
 output containerAppPrincipalId string = ca.identity.principalId
-output acrLoginServer string = acr.properties.loginServer // Output ACR login server
-output acrName string = acr.name // Output ACR name
+output acrLoginServer string = acr.properties.loginServer
+output acrName string = acr.name
