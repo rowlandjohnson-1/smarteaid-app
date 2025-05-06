@@ -77,10 +77,10 @@ var acrName = toLower('acr${companyPrefix}${purpose}${environment}') // Uses 'st
 var acrLoginServer = '${acrName}.azurecr.io' // Example: acrsdtaidetectorstg.azurecr.io
 
 // Define consistent secret names (used for creation in KV and referencing in ACA)
-var secretNameCosmosConnectionString = 'CosmosDbConnectionString'
-var secretNameKindeClientSecret = 'KindeClientSecret'
-var secretNameStripeSecretKey = 'StripeSecretKey'
-var secretNameStorageConnectionString = 'StorageConnectionString'
+var secretNameCosmosConnectionString = 'cosmos-db-connection-string' // All lowercase, hyphens
+var secretNameKindeClientSecret = 'kinde-client-secret'
+var secretNameStripeSecretKey = 'stripe-secret-key'
+var secretNameStorageConnectionString = 'storage-connection-string'
 
 // Role Definition IDs
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User Role ID
