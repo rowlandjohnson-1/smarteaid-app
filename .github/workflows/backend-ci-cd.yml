@@ -122,10 +122,15 @@ jobs:
           driver-opts: |
             image=moby/buildkit:master
             network=host
-          # The builder name will be available in steps.buildx.outputs.name
 
-      - name: Inspect Docker Buildx builders
-        run: docker buildx ls
+      - name: Verify Buildx Setup
+        run: |
+          # Wait a moment for the builder to be fully ready
+          sleep 5
+          # Verify the builder exists and is active
+          docker buildx ls
+          # Ensure the builder is properly configured
+          docker buildx inspect --bootstrap
 
       - name: Echo Buildx context outputs
         run: |
@@ -149,7 +154,7 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          builder: ${{ steps.buildx.outputs.name }}
+          # Use the default builder since we set it as active
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
