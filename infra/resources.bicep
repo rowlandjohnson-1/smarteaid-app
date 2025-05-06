@@ -218,12 +218,12 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
   identity: {
     type: 'SystemAssigned' // Enable System Assigned Managed Identity
   }
-  properties: { // <<<< THIS BLOCK IS UPDATED BASED ON bicep_container_app_config_v2 >>>>
-    managedEnvironmentId: cae.id // Reference to your Container Apps Environment
+  properties: {
+    managedEnvironmentId: cae.id // Link to the Container Apps Environment
     configuration: {
       registries: [
         {
-          server: acrLoginServer // Your ACR login server (e.g., from a variable)
+          server: acrLoginServer // Your ACR login server
           identity: 'system'    // Using system-assigned managed identity for ACR pull
         }
       ]
@@ -251,104 +251,97 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
       ingress: {
-        external: false // Set to true if you need public internet access from outside the VNet/CAE
-        targetPort: 8000 // *** Correct: Matches your FastAPI Uvicorn port from logs ***
-        transport: 'auto' // Automatically determines HTTP/HTTP2
-        // allowInsecure: false // Default is false. Set to true only if terminating SSL at an upstream gateway
-                             // and want plain HTTP between the gateway and the container app.
+        external: false
+        // For this diagnostic test with helloworld, targetPort should be 80.
+        // When reverting to your app, this should be 8000.
+        targetPort: 80 // Port helloworld listens on
+        transport: 'auto'
       }
     }
     template: {
       containers: [
         {
           name: 'backend-api' // Your container name
-          image: containerImage // *** Correct: Uses the parameter for your actual application image ***
+          // --- TEMPORARY CHANGE FOR THIS DIAGNOSTIC TEST ---
+          // 1. Comment out your actual containerImage line:
+          // image: containerImage
+          // 2. Use the public helloworld image instead:
+          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          // --- END OF TEMPORARY CHANGE ---
           resources: {
-            cpu: json(containerAppCpuCoreCount) // e.g., 0.5
-            memory: containerAppMemoryGiB     // e.g., '1.0Gi'
+            cpu: json(containerAppCpuCoreCount)
+            memory: containerAppMemoryGiB
           }
+          // --- TEMPORARY CHANGE FOR THIS DIAGNOSTIC TEST (OPTIONAL BUT RECOMMENDED FOR SIMPLICITY) ---
+          // 3. For maximum simplicity in this test, temporarily comment out the 'env' block
+          //    The probes below for helloworld will target port 80.
+          /* // Temporarily comment out env block
           env: [
-            // Your existing environment variables, including those using secretRef
             {
               name: 'ENVIRONMENT'
               value: environment
-            }
+            },
             {
               name: 'MONGODB_URL'
               secretRef: secretNameCosmosConnectionString
-            }
+            },
             {
               name: 'KINDE_CLIENT_SECRET'
               secretRef: secretNameKindeClientSecret
-            }
+            },
             {
               name: 'STRIPE_SECRET_KEY'
               secretRef: secretNameStripeSecretKey
-            }
+            },
             {
               name: 'AZURE_BLOB_CONNECTION_STRING'
               secretRef: secretNameStorageConnectionString
-            }
+            },
             {
               name: 'KINDE_DOMAIN'
               value: kindeDomain
-            }
+            },
             {
               name: 'KINDE_AUDIENCE'
               value: kindeAudience
             }
           ]
+          */ // End of temporarily commented out env block
+          // --- HEALTH PROBES (Adjusted for helloworld which listens on port 80 and path /) ---
           probes: [
             {
-              type: 'Liveness' // Determines if the container is running and responsive
+              type: 'Liveness'
               httpGet: {
-                path: '/healthz' // *** Correct: Matches your FastAPI liveness endpoint ***
-                port: 8000       // *** Correct: Matches your FastAPI Uvicorn port ***
-                scheme: 'HTTP'   // Your application serves HTTP on this port
-              }
-              initialDelaySeconds: 30 // Time (seconds) to wait after container starts before first probe
-                                      // Allow time for app init, DB connection (as seen in your logs)
-              periodSeconds: 30       // How often (seconds) to perform the probe
-              failureThreshold: 3     // Number of consecutive failures after which container is considered unhealthy
-              timeoutSeconds: 5       // Seconds after which the probe times out
-            }
-            {
-              type: 'Readiness' // Determines if the container is ready to accept traffic
-              httpGet: {
-                path: '/readyz'  // *** Correct: Matches your FastAPI readiness endpoint ***
-                port: 8000       // *** Correct: Matches your FastAPI Uvicorn port ***
+                path: '/'     // Helloworld responds at the root path
+                port: 80      // Helloworld image listens on port 80
                 scheme: 'HTTP'
               }
-              initialDelaySeconds: 35 // Give slightly more time for readiness checks (e.g., DB fully ready)
+              initialDelaySeconds: 15
               periodSeconds: 30
               failureThreshold: 3
-              timeoutSeconds: 10      // Readiness probe might involve DB checks, so allow a bit more time
+              timeoutSeconds: 5
             }
-            // Optional: Startup Probe (if your app has a very long startup time
-            // before even the liveness probe should be active)
-            // {
-            //   type: 'Startup'
-            //   httpGet: {
-            //     path: '/healthz' // Can often reuse the liveness path for startup
-            //     port: 8000
-            //     scheme: 'HTTP'
-            //   }
-            //   initialDelaySeconds: 10 // Start probing earlier for startup
-            //   periodSeconds: 15
-            //   failureThreshold: 12    // e.g., 12 attempts * 15s = 3 minutes for startup to complete
-            //   timeoutSeconds: 3
-            // }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/'     // Helloworld responds at the root path
+                port: 80      // Helloworld image listens on port 80
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 20
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 10
+            }
           ]
         }
       ]
       scale: {
-        minReplicas: containerAppMinReplicas // e.g., 0 for dev, 1 for prod
-        maxReplicas: containerAppMaxReplicas // e.g., 2 for dev, 5 for prod
-        // rules: [ ... ] // Add scaling rules if needed
+        minReplicas: containerAppMinReplicas
+        maxReplicas: containerAppMaxReplicas
       }
     }
   }
-  // MODIFIED: Add explicit dependency on Key Vault
   dependsOn: [
     cae
     kv // Explicitly depend on Key Vault as we reference its properties
