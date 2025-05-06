@@ -120,6 +120,9 @@ jobs:
           use: true
           install: true # Ensure buildx is installed
 
+      - name: Inspect Docker Buildx builders
+        run: docker buildx ls
+
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
         uses: azure/docker-login@v1
@@ -134,7 +137,6 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          builder: ${{ steps.buildx.name }} # Use the builder instance created above
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
