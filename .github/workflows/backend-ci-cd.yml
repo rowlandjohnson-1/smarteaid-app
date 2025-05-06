@@ -122,15 +122,20 @@ jobs:
           driver-opts: |
             image=moby/buildkit:master
             network=host
+          # Create a named builder instance
+          buildkitd-flags: --debug
+          platforms: linux/amd64
 
-      - name: Verify Buildx Setup
+      - name: Create and Use Buildx Builder
         run: |
-          # Wait a moment for the builder to be fully ready
-          sleep 5
-          # Verify the builder exists and is active
+          # Remove any existing builder with our name
+          docker buildx rm smarteaid-builder || true
+          # Create a new builder instance
+          docker buildx create --name smarteaid-builder --driver docker-container --use
+          # Verify the builder
           docker buildx ls
-          # Ensure the builder is properly configured
-          docker buildx inspect --bootstrap
+          # Ensure it's properly configured
+          docker buildx inspect --bootstrap smarteaid-builder
 
       - name: Echo Buildx context outputs
         run: |
@@ -154,7 +159,7 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          # Use the default builder since we set it as active
+          builder: smarteaid-builder
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
