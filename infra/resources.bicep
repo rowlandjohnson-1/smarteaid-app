@@ -236,23 +236,23 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
         // ACA implicitly uses this 'name' to look up the secret with the same name in Key Vault
         // using the specified identity and keyVaultUrl.
         {
-          name: secretNameCosmosConnectionString // Internal ACA Name (e.g., 'CosmosDbConnectionString')
-          keyVaultUrl: kv.properties.vaultUri   // Base Vault URL
+          name: secretNameCosmosConnectionString // Internal ACA Name (e.g., 'cosmos-db-connection-string')
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameCosmosConnectionString}'   // Corrected: Full secret URI
           identity: 'system'                    // Use system identity to access KV
         }
         {
-          name: secretNameKindeClientSecret     // Internal ACA Name ('KindeClientSecret')
-          keyVaultUrl: kv.properties.vaultUri
+          name: secretNameKindeClientSecret     // Internal ACA Name ('kinde-client-secret')
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameKindeClientSecret}'    // Corrected: Full secret URI
           identity: 'system'
         }
         {
-          name: secretNameStripeSecretKey       // Internal ACA Name ('StripeSecretKey')
-          keyVaultUrl: kv.properties.vaultUri
+          name: secretNameStripeSecretKey       // Internal ACA Name ('stripe-secret-key')
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStripeSecretKey}'      // Corrected: Full secret URI
           identity: 'system'
         }
         {
-          name: secretNameStorageConnectionString // Internal ACA Name ('StorageConnectionString')
-          keyVaultUrl: kv.properties.vaultUri
+          name: secretNameStorageConnectionString // Internal ACA Name ('storage-connection-string')
+          keyVaultUrl: '${kv.properties.vaultUri}secrets/${secretNameStorageConnectionString}' // Corrected: Full secret URI
           identity: 'system'
         }
       ]
