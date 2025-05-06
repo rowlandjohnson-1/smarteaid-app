@@ -126,16 +126,12 @@ jobs:
           buildkitd-flags: --debug
           platforms: linux/amd64
 
-      - name: Create and Use Buildx Builder
+      - name: Verify Buildx Setup
         run: |
-          # Remove any existing builder with our name
-          docker buildx rm smarteaid-builder || true
-          # Create a new builder instance
-          docker buildx create --name smarteaid-builder --driver docker-container --use
-          # Verify the builder
+          # Verify the builder exists and is active
           docker buildx ls
           # Ensure it's properly configured
-          docker buildx inspect --bootstrap smarteaid-builder
+          docker buildx inspect --bootstrap
 
       - name: Echo Buildx context outputs
         run: |
@@ -159,7 +155,7 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          builder: smarteaid-builder
+          builder: ${{ steps.buildx.outputs.name }}
           context: ./backend # Assuming Dockerfile is in the 'backend' directory
           push: true
           tags: ${{ steps.meta.outputs.tags }}
