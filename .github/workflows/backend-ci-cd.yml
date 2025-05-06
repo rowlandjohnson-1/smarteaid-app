@@ -113,7 +113,12 @@ jobs:
 
       # Set up Docker Buildx
       - name: Set up Docker Buildx
+        id: buildx # Give it an ID to reference its outputs if needed
         uses: docker/setup-buildx-action@v3
+        # Add driver options for better GHA cache compatibility
+        # with:
+        #   driver: docker-container # Use the docker-container driver
+        #   buildkitd-flags: "--debug" # Optional: for more buildkit daemon logs
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry
