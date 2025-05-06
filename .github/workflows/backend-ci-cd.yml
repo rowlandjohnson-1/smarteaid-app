@@ -128,12 +128,10 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          context: ./backend # Assuming Dockerfile is in the 'backend' directory
+          context: ./backend
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
 
   deploy_to_aca:
