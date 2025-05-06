@@ -29,8 +29,8 @@ param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
 
 // --- Add Secure Parameters needed by resources module ---
 @secure()
-@description('Required. Cosmos DB connection string.')
-param cosmosDbConnectionString string
+@description('Required. MongoDB connection string (formerly Cosmos DB).')
+param mongoDbUrl string
 
 @secure()
 @description('Required. Kinde client secret for backend validation.')
@@ -44,6 +44,13 @@ param stripeSecretKey string
 @description('Required. Connection string for Azure Blob Storage.')
 param storageConnectionString string
 
+// --- Add Kinde non-secret parameters ---
+@description('Required. Kinde domain for authentication.')
+param kindeDomain string
+
+@description('Required. Kinde audience for authentication.')
+param kindeAudience string
+// --- End Kinde non-secret parameters ---
 
 // Define the target scope for the Bicep file
 targetScope = 'subscription'
@@ -83,10 +90,13 @@ module resources 'resources.bicep' = {
     containerAppMaxReplicas: containerAppMaxReplicas
 
     // Pass down Secure parameters
-    cosmosDbConnectionString: cosmosDbConnectionString
+    mongoDbUrl: mongoDbUrl
     kindeClientSecret: kindeClientSecret
     stripeSecretKey: stripeSecretKey
     storageConnectionString: storageConnectionString
+    // Pass down Kinde non-secret parameters
+    kindeDomain: kindeDomain
+    kindeAudience: kindeAudience
   }
   // Explicit dependency to ensure RG exists before module deployment starts
   dependsOn: [

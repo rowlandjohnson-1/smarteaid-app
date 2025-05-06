@@ -33,8 +33,8 @@ param containerAppMaxReplicas int = (environment == 'prod') ? 5 : 2
 
 // --- Secure Parameters for Secrets ---
 @secure()
-@description('Required. Cosmos DB connection string.')
-param cosmosDbConnectionString string
+@description('Required. MongoDB connection string (formerly Cosmos DB).')
+param mongoDbUrl string
 
 @secure()
 @description('Required. Kinde client secret for backend validation.')
@@ -47,6 +47,14 @@ param stripeSecretKey string
 @secure()
 @description('Required. Connection string for Azure Blob Storage.')
 param storageConnectionString string
+
+// --- Add Kinde non-secret parameters ---
+@description('Required. Kinde domain for authentication.')
+param kindeDomain string
+
+@description('Required. Kinde audience for authentication.')
+param kindeAudience string
+// --- End Kinde non-secret parameters ---
 
 // --- Variables ---
 var uniqueSeed = uniqueString(subscription().subscriptionId)
@@ -103,7 +111,7 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   resource cosmosConnectionStringSecret 'secrets@2023-07-01' = {
     name: secretNameCosmosConnectionString
     properties: {
-      value: cosmosDbConnectionString
+      value: mongoDbUrl
     }
   }
   resource kindeSecret 'secrets@2023-07-01' = {
@@ -214,7 +222,32 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
           identity: 'system'     // Use the system-assigned identity
         }
       ]
-      secrets: null // Not using ACA secrets block, using Key Vault instead
+      secrets: [
+        {
+          name: 'aca-mongodb-url' // Internal ACA secret name
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+          secretName: secretNameCosmosConnectionString // Actual KV secret name: CosmosDbConnectionString
+        }
+        {
+          name: 'aca-kinde-client-secret'
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+          secretName: secretNameKindeClientSecret // Actual KV secret name: KindeClientSecret
+        }
+        {
+          name: 'aca-stripe-secret-key'
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+          secretName: secretNameStripeSecretKey // Actual KV secret name: StripeSecretKey
+        }
+        {
+          name: 'aca-storage-connection-string'
+          keyVaultUrl: kv.properties.vaultUri
+          identity: 'system'
+          secretName: secretNameStorageConnectionString // Actual KV secret name: StorageConnectionString
+        }
+      ]
       // ingress: { ... } // Add your ingress configuration here if needed
     }
     template: {
@@ -237,7 +270,32 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
               name: 'AZURE_KEY_VAULT_NAME'
               value: kv.name
             }
-            // Add other non-secret env vars here if needed
+            // Secrets from Key Vault via ACA secrets
+            {
+              name: 'MONGODB_URL'
+              secretRef: 'aca-mongodb-url'
+            }
+            {
+              name: 'KINDE_CLIENT_SECRET'
+              secretRef: 'aca-kinde-client-secret'
+            }
+            {
+              name: 'STRIPE_SECRET_KEY'
+              secretRef: 'aca-stripe-secret-key'
+            }
+            {
+              name: 'AZURE_BLOB_CONNECTION_STRING'
+              secretRef: 'aca-storage-connection-string'
+            }
+            // Direct value environment variables
+            {
+              name: 'KINDE_DOMAIN'
+              value: kindeDomain
+            }
+            {
+              name: 'KINDE_AUDIENCE'
+              value: kindeAudience
+            }
           ]
         }
       ]
