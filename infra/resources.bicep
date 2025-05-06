@@ -352,4 +352,3 @@ output cosmosDbAccountName string = cosmos.name
 output containerAppsEnvId string = cae.id
 output containerAppName string = ca.name
 output containerAppPrincipalId string = ca.identity.principalId // Output managed identity ID
-#
