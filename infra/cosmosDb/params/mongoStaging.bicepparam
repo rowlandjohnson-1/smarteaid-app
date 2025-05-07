@@ -14,6 +14,54 @@ param parEnv =  'staging'
 
 param parMongoDbName =  'aidetector'
 
+param parMongoCollections = [
+  {
+    name: 'batches'
+    indexes: {
+    }
+  }
+  {
+    name: 'classgroups'
+    indexes: {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+  }
+  {
+    name: 'documents'
+    indexes: {
+    }
+  }
+  {
+    name: 'results'
+    indexes: {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+  }
+  {
+    name: 'students'
+    indexes: {
+    }
+  }
+  {
+    name: 'teachers'
+    indexes: {
+    }
+  }
+  {
+    name: 'users'
+    indexes: {
+    }
+  }
+]
+
 param parSubId =  '50a7d228-9d3a-4067-bb57-aab272dfe934'
 
 // param parDnsSubId =  'a957c3f5-b45c-4848-ba9f-48f1eb1a527d'

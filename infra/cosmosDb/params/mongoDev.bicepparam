@@ -2,7 +2,68 @@ using '../mongo.bicep'
 
 param parLocation =  'uksouth'
 
-param parMongoDbName =  'aidetector'
+param parMongoDbName =  'aidetector_${parEnv}'
+
+var shardKey = {
+  keys: [
+    '_id'
+  ]
+}
+
+param parMongoCollections = [
+  {
+    name: 'batches'
+    indexes: []
+    shardKey: shardKey
+  }
+  {
+    name: 'classgroups'
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
+    shardKey: shardKey
+  }
+  {
+    name: 'documents'
+    indexes: []
+    shardKey: shardKey
+  }
+  {
+    name: 'results'
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+  ]
+    shardKey: shardKey
+  }
+  {
+    name: 'students'
+    indexes: []
+    shardKey: shardKey
+  }
+  {
+    name: 'teachers'
+    indexes: []
+    shardKey: shardKey
+  }
+  {
+    name: 'users'
+    indexes: []
+    shardKey: shardKey
+  }
+  
+]
 
 param parLockName = 'deleteLock'
 

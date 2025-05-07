@@ -18,3 +18,18 @@ az deployment sub create --name "mongoDBDeployProd" --location "uksouth" --templ
 az deployment sub create --name "acrDeployDev" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters '.\infra\containerRegistry\params\acrDev.bicepparam'
 az deployment sub create --name "acrDeployStaging" --location "uksouth" --template-file ".\bicep\containerRegistry\acr.bicep" --parameters '.\bicep\containerRegistry\params\acrStaging.bicepparam'
 az deployment sub create --name "acrDeployProd" --location "uksouth" --template-file ".\bicep\containerRegistry\acr.bicep" --parameters '.\bicep\containerRegistry\params\acrProd.bicepparam'
+
+//Deploy Storage Account
+az deployment sub create --name "storageAccountDeployDev" --location "uksouth" --template-file ".\infra\storageAccount\sa.bicep" --parameters '.\infra\storageAccount\params\saDev.bicepparam'
+az deployment sub create --name "storageAccountDeployStaging" --location "uksouth" --template-file ".\bicep\storageAccount\sa.bicep" --parameters '.\bicep\storageAccount\params\saStaging.bicepparam'
+az deployment sub create --name "storageAccountDeployProd" --location "uksouth" --template-file ".\bicep\storageAccount\sa.bicep" --parameters '.\bicep\storageAccount\params\saProd.bicepparam'
+
+//Deploy Container App Environment
+az deployment sub create --name "containerAppEnvDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerEnv.bicep" --parameters '.\infra\containerApp\params\containerEnvDev.bicepparam'
+az deployment sub create --name "containerAppEnvDeployStaging" --location "uksouth" --template-file ".\bicep\containerApp\containerEnv.bicep" --parameters '.\bicep\containerApp\params\containerEnvStaging.bicepparam'
+az deployment sub create --name "containerAppEnvDeployProd" --location "uksouth" --template-file ".\bicep\containerApp\containerEnv.bicepparam" --parameters '.\bicep\containerApp\params\containerEnvProd.bicepparam'
+
+//Deploy Container App
+az deployment sub create --name "containerAppDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerApp.bicep" --parameters '.\infra\containerApp\params\containerAppDev.bicepparam'
+az deployment sub create --name "containerAppDeployStaging" --location "uksouth" --template-file ".\bicep\containerApp\containerApp.bicep" --parameters '.\bicep\containerApp\params\containerAppStaging.bicepparam'
+az deployment sub create --name "containerAppDeployProd" --location "uksouth" --template-file ".\bicep\containerApp\containerApp.bicep" --parameters '.\bicep\containerApp\params\containerAppProd.bicepparam'

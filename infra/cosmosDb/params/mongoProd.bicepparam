@@ -8,6 +8,54 @@ param parLockName = 'deleteLock'
 
 param parMongoDbAccountName =  'mongo-sdt-uks-aid-${parEnv}'
 
+param parMongoCollections = [
+  {
+    name: 'batches'
+    indexes: {
+    }
+  }
+  {
+    name: 'classgroups'
+    indexes: {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+  }
+  {
+    name: 'documents'
+    indexes: {
+    }
+  }
+  {
+    name: 'results'
+    indexes: {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+  }
+  {
+    name: 'students'
+    indexes: {
+    }
+  }
+  {
+    name: 'teachers'
+    indexes: {
+    }
+  }
+  {
+    name: 'users'
+    indexes: {
+    }
+  }
+]
+
 param parRgName =  'rg-sdt-uks-aid-${parEnv}'
 
 param parMongoDbName =  'aidetector'

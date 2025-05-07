@@ -12,7 +12,7 @@ param parLockName string
 
 param parMongoDbName string
 
-// param parMongoCollections array
+param parMongoCollections array
 
 param parMongoDbAccountName string
 
@@ -90,6 +90,7 @@ module mongoDB 'br/public:avm/res/document-db/database-account:0.6.0' = {
     mongodbDatabases: [
       {
         name: parMongoDbName
+        collections: parMongoCollections
       }
     ]
     secretsExportConfiguration: {
