@@ -74,10 +74,8 @@ jobs:
         id: set_acr
         run: |
           # --- !!! IMPORTANT: Ensure this matches your ACR naming !!! ---
-          COMPANY_PREFIX="sdt"    # Your company prefix
-          PURPOSE="aidetector" # Your purpose
           # ---
-          ACR_NAME="acr${COMPANY_PREFIX}${PURPOSE}${ENVIRONMENT}"
+          ACR_NAME="acrbesdtuksaid${ENVIRONMENT}"
           echo "ACR Name for environment ${{ steps.set_env.outputs.environment }}: ${ACR_NAME}"
           echo "acr_name=${ACR_NAME}" >> $GITHUB_OUTPUT
         env:
@@ -164,26 +162,26 @@ jobs:
           cache-to: type=gha,mode=max
 
 
-  deploy_to_aca:
-    name: Deploy to Azure Container Apps
-    needs: [determine_environment, build_and_push] # Depends on previous jobs
-    runs-on: ubuntu-latest
-    # Link to the GitHub Environment for secrets needed by azure-infra-deploy.yml
-    environment: ${{ needs.determine_environment.outputs.environment }}
+  # deploy_to_aca:
+  #   name: Deploy to Azure Container Apps
+  #   needs: [determine_environment, build_and_push] # Depends on previous jobs
+  #   runs-on: ubuntu-latest
+  #   # Link to the GitHub Environment for secrets needed by azure-infra-deploy.yml
+  #   environment: ${{ needs.determine_environment.outputs.environment }}
 
-    steps:
-      # 1. Checkout repository code to access the infra deployment workflow file
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }} # Checkout the same ref that triggered the workflow
+  #   steps:
+  #     # 1. Checkout repository code to access the infra deployment workflow file
+  #     - name: Checkout Code
+  #       uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ github.ref }} # Checkout the same ref that triggered the workflow
 
-      # 2. Trigger the Infrastructure Deployment Workflow
-      #    This reuses the existing workflow, passing the specific image tag
-      - name: Trigger Infrastructure Deployment
-        uses: benc-uk/workflow-dispatch@v1 # Action to trigger another workflow
-        with:
-          workflow: azure-infra-deploy.yml # Name of the workflow file to trigger
-          ref: ${{ github.ref }} # Trigger on the same branch/tag
-          inputs: '{ "environment": "${{ needs.determine_environment.outputs.environment }}", "image_tag": "${{ needs.determine_environment.outputs.image_tag }}" }'
-          token: ${{ secrets.PAT_TOKEN }} # A Personal Access Token with repo/workflow scope is needed
+  #     # 2. Trigger the Infrastructure Deployment Workflow
+  #     #    This reuses the existing workflow, passing the specific image tag
+  #     - name: Trigger Infrastructure Deployment
+  #       uses: benc-uk/workflow-dispatch@v1 # Action to trigger another workflow
+  #       with:
+  #         workflow: azure-infra-deploy.yml # Name of the workflow file to trigger
+  #         ref: ${{ github.ref }} # Trigger on the same branch/tag
+  #         inputs: '{ "environment": "${{ needs.determine_environment.outputs.environment }}", "image_tag": "${{ needs.determine_environment.outputs.image_tag }}" }'
+  #         token: ${{ secrets.PAT_TOKEN }} # A Personal Access Token with repo/workflow scope is needed
