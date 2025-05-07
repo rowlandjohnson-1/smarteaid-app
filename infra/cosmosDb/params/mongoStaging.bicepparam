@@ -12,6 +12,8 @@ param parRgName =  'rg-sdt-uks-aid-${parEnv}'
 
 param parEnv =  'staging'
 
+param parMongoDbName =  'aidetector'
+
 param parSubId =  '50a7d228-9d3a-4067-bb57-aab272dfe934'
 
 // param parDnsSubId =  'a957c3f5-b45c-4848-ba9f-48f1eb1a527d'
@@ -63,4 +65,4 @@ param parBackupPolicyContinuousTier = 'Continuous7Days'
 
 param parKvResourceId = '/subscriptions/${parSubId}/resourceGroups/${parRgName}/providers/Microsoft.KeyVault/vaults/kv-sdt-uks-aid-${parEnv}'
 
-param parMongoCsSecretName = 'mongo-aid-cs-${parEnv}'
+param parMongoCsSecretName = 'mongodb-aid-cs-${parEnv}'

@@ -75,7 +75,7 @@ jobs:
         run: |
           # --- !!! IMPORTANT: Ensure this matches your ACR naming !!! ---
           # ---
-          ACR_NAME="acrbesdtuksaid${ENVIRONMENT}"
+          ACR_NAME="acrsdtuksaid${ENVIRONMENT}"
           echo "ACR Name for environment ${{ steps.set_env.outputs.environment }}: ${ACR_NAME}"
           echo "acr_name=${ACR_NAME}" >> $GITHUB_OUTPUT
         env:
