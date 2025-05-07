@@ -103,7 +103,7 @@ jobs:
       uses: azure/cli@v1
       with:
         inlineScript:
-          az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\acr\acr.bicep" --parameters ".\infra\acr\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters ".\infra\containerRegistry\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
 
     - name: Deploy Storage Account
       uses: azure/cli@v1
