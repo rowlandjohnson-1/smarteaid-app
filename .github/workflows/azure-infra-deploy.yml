@@ -98,7 +98,7 @@ jobs:
             --template-file ./infra/main.bicep \
             --parameters environment=${{ github.event.inputs.environment }} \
             --parameters containerImage='${{ steps.image_name.outputs.imageName }}' \
-            --parameters cosmosDbConnectionString='${{ secrets.COSMOS_DB_CONNECTION_STRING }}' \
+            --parameters mongoDbUrl='${{ secrets.COSMOS_DB_CONNECTION_STRING }}' \
             --parameters kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
             --parameters stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
             --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
