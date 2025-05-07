@@ -14,52 +14,65 @@ param parEnv =  'staging'
 
 param parMongoDbName =  'aidetector'
 
+var shardKey = {
+  keys: [
+    '_id'
+  ]
+}
+
 param parMongoCollections = [
   {
     name: 'batches'
-    indexes: {
-    }
+    indexes: []
+    shardKey: shardKey
   }
   {
     name: 'classgroups'
-    indexes: {
+    indexes: [
+      {
       key: {
         keys: [
           '_id'
         ]
       }
     }
+    ]
+    shardKey: shardKey
   }
   {
     name: 'documents'
-    indexes: {
-    }
+    indexes: []
+    shardKey: shardKey
   }
   {
     name: 'results'
-    indexes: {
+    indexes: [
+      {
       key: {
         keys: [
           '_id'
         ]
       }
     }
+  ]
+    shardKey: shardKey
   }
   {
     name: 'students'
-    indexes: {
-    }
+    indexes: []
+    shardKey: shardKey
   }
   {
     name: 'teachers'
-    indexes: {
-    }
+    indexes: []
+    shardKey: shardKey
   }
   {
     name: 'users'
-    indexes: {
-    }
+    indexes: []
+    shardKey: shardKey
   }
+  
 ]
 
 param parSubId =  '50a7d228-9d3a-4067-bb57-aab272dfe934'

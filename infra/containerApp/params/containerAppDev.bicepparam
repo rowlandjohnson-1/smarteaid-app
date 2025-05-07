@@ -46,7 +46,10 @@ param parEnvVariables01 = [
     name: 'KINDE_AUDIENCE'
     value: 'https://api.aidetector.sendient.ai'
   }
-
+  {
+    name: 'MONGODB_DATABASE_NAME'
+    value: 'aidetector_${parEnv}'
+  }
 ]
 
 // Follow the secret refs from the env variables and registries
