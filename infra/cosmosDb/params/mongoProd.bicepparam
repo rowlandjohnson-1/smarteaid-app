@@ -17,7 +17,15 @@ var shardKey = {
 param parMongoCollections = [
   {
     name: 'batches'
-    indexes: []
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
     shardKey: shardKey
   }
   {
@@ -35,7 +43,15 @@ param parMongoCollections = [
   }
   {
     name: 'documents'
-    indexes: []
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
     shardKey: shardKey
   }
   {
@@ -53,20 +69,43 @@ param parMongoCollections = [
   }
   {
     name: 'students'
-    indexes: []
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
     shardKey: shardKey
   }
   {
     name: 'teachers'
-    indexes: []
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
     shardKey: shardKey
   }
   {
     name: 'users'
-    indexes: []
+    indexes: [
+      {
+      key: {
+        keys: [
+          '_id'
+        ]
+      }
+    }
+    ]
     shardKey: shardKey
   }
-  
 ]
 
 param parRgName =  'rg-sdt-uks-aid-${parEnv}'
