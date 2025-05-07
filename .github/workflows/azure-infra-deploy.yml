@@ -98,10 +98,13 @@ jobs:
             --template-file ./infra/main.bicep \
             --parameters environment=${{ github.event.inputs.environment }} \
             --parameters containerImage='${{ steps.image_name.outputs.imageName }}' \
-            --parameters mongoDbUrl='${{ secrets.COSMOS_DB_CONNECTION_STRING }}' \
+            --parameters mongoDbUrl='${{ secrets.MONGODB_URL }}' \
             --parameters kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
             --parameters stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
             --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
+            --parameters kindeAudience='${{ secrets.KINDE_AUDIENCE }}' \
+            --parameters kindeDomain='${{ secrets.KINDE_DOMAIN }}' \
+            --parameters deploymentSuffix='${{ github.run_id }}' \
             --debug
             # Add any other parameters defined in main.bicep here if they aren't handled by defaults/conditionals
             # e.g. --parameters companyPrefix='sdt' purpose='aidetector' location='uksouth' (if not using defaults)
