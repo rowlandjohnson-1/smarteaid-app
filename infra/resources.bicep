@@ -4,6 +4,8 @@
 // - Note: Soft delete is automatically enabled when purge protection is enabled.
 //   The 'softDeleteRetentionInDays' property is still relevant.
 
+targetScope = 'resourceGroup'
+
 @description('Company prefix for resource names.')
 param companyPrefix string = 'sdt'
 
