@@ -47,7 +47,7 @@ param parEnvVariables01 = [
     value: 'https://api.aidetector.sendient.ai'
   }
   {
-    name: 'MONGODB_DATABASE_NAME'
+    name: 'MONGO_DATABASE_NAME'
     value: 'aidetector_${parEnv}'
   }
 ]

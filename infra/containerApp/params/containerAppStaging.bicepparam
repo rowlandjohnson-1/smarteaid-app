@@ -1,84 +1,132 @@
 using '../containerApp.bicep'
 
-param parUserMi = '/subscriptions/dbdaefc1-1c79-417b-a7b9-4ac0a2559ee7/resourcegroups/rg-sdt-uks-identity-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-sdt-uks-kv-prod'
+
+param parEnv =  'staging'
+
+param parRgName =  'rg-sdt-uks-aid-${parEnv}'
+
+param parSubId =  '50a7d228-9d3a-4067-bb57-aab272dfe934'
+
+param parUserMi = '/subscriptions/${parSubId}/resourcegroups/${parRgName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mi-sdt-uks-ca-${parEnv}'
+
+param parRegistriesCredentials = [
+  {
+    server: 'acrsdtuksaid${parEnv}.azurecr.io'
+    username: 'acrsdtuksaid${parEnv}'
+    passwordSecretRef: 'acrsdtuksaid${parEnv}-password'
+  }
+]
 
 param parEnvVariables01 = [
   {
-    name: 'var1'
-    value: 'value1'
+    name: 'ENVIRONMENT'
+    value: parEnv
   }
-  // {
-  //   // name: 'ContainerAppKeyVaultStoredSecretName'
-  //   // secretRef: 'keyvaultstoredsecret'
-  // }
+  {
+    name: 'MONGODB_URL'
+    secretRef: 'cosmos-db-connection-string'
+  }
+  {
+    name: 'KINDE_CLIENT_SECRET'
+    secretRef: 'kinde-client-secret'
+  }
+  {
+    name: 'STRIPE_SECRET_KEY'
+    secretRef: 'stripe-secret-key'
+  }
+  {
+    name: 'AZURE_BLOB_CONNECTION_STRING'
+    secretRef: 'storage-connection-string'
+  }
+  {
+    name: 'KINDE_DOMAIN'
+    value: 'https://aidetector.kinde.com'
+  }
+  {
+    name: 'KINDE_AUDIENCE'
+    value: 'https://api.aidetector.sendient.ai'
+  }
+  {
+    name: 'MONGO_DATABASE_NAME'
+    value: 'aidetector_${parEnv}'
+  }
 ]
 
 // Follow the secret refs from the env variables and registries
 param parSecretList = [
         {
-          name: 'containerappstoredsecret'
-          value: 'test'
+          identity: parUserMi
+          keyVaultUrl: 'https://kv-sdt-uks-aid-${parEnv}.vault.azure.net/secrets/mongodb-aid-cs-${parEnv}'
+          name: 'cosmos-db-connection-string'
         }
         {
           identity: parUserMi
-          keyVaultUrl: 'https://kv-sdt-uks-idty-prod.vault.azure.net/secrets/acrsdtuksbestaging-password/5f13cd3b0f5c4f0a8dc360dfdb0b66da'
-          name: 'acrsdtuksbestaging-password'
+          keyVaultUrl: 'https://kv-sdt-uks-aid-${parEnv}.vault.azure.net/secrets/acrsdtuksaid${parEnv}-password'
+          name: 'acrsdtuksaid${parEnv}-password'
+        }
+        {
+          identity: parUserMi
+          keyVaultUrl: 'https://kv-sdt-uks-aid-${parEnv}.vault.azure.net/secrets/sa-connection-string-${parEnv}'
+          name: 'storage-connection-string'
+        }
+        {
+          identity: parUserMi
+          keyVaultUrl: 'https://kv-sdt-uks-aid-${parEnv}.vault.azure.net/secrets/kinde-secret-${parEnv}'
+          name: 'kinde-client-secret'
+        }
+        {
+          identity: parUserMi
+          keyVaultUrl: 'https://kv-sdt-uks-aid-${parEnv}.vault.azure.net/secrets/stripe-secret-${parEnv}'
+          name: 'stripe-secret-key'
         }
       ]
 
 param parProbes01 = [
-          // {
-          //   httpGet: {
-          //     httpHeaders: []
-          //     path: '/'
-          //     port: 2003
-          //   }
-          //   initialDelaySeconds: 3
-          //   periodSeconds: 3
-          //   type: 'Liveness'
-          // }
+            {
+              type: 'Liveness'
+              httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
+              initialDelaySeconds: 45
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 10
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
+              initialDelaySeconds: 60
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 15
+            }
         ]
 
-param parContainerName01 = 'container-sdt-uks-ingest-staging'
+param parContainerName01 = 'container-sdt-uks-aid-${parEnv}'
 
 param parContainerResources01 = {
-          cpu: '1.0'
-          memory: '2Gi'
-          ephemeralStorage: '1Gi'
+          cpu: '0.5'
+          memory: '1Gi'
         }
 
 param parScaleRules = [
     ]
 
-param parScaleMaxReplicas = 20
+param parScaleMaxReplicas = 2
 
-param parScaleMinReplicas = 2
+param parScaleMinReplicas = 0
 
-param parRegistriesCredentials = [
-  {
-    server: 'acrsdtuksbestaging.azurecr.io'
-    username: 'acrsdtuksbestaging'
-    passwordSecretRef: 'acrsdtuksbestaging-password'
-  }
-]
+param parContainerAppName = 'ca-sdt-uks-aid-${parEnv}'
 
-param parContainerAppName = 'ca-sdt-uks-ingest-staging'
-
-// Set to false to entirely disable ingress and void the other ingress settings
+// Set to true to entirely disable ingress and void the other ingress settings
 param parDisableIngress = false
 
-param parContainerImage01 = 'acrsdtuksbestaging.azurecr.io/sendient/unoserver:latest'
-
-param parTargetPort = 2003
+param parContainerImage01 = 'acrsdtuksaid${parEnv}.azurecr.io/backend-api:latest'
 
 // For CI/CD, use output of container env deployment
-param parContainerEnvResourceId = '/subscriptions/13c990e9-03e7-4a84-b137-5095c6a0246e/resourceGroups/rg-sdt-uks-workloads-staging/providers/Microsoft.App/managedEnvironments/ce-sdt-uks-ingest-staging'
-
-param parRgName = 'rg-sdt-uks-workloads-staging'
-
-param parSubId = '13c990e9-03e7-4a84-b137-5095c6a0246e'
+param parContainerEnvResourceId = '/subscriptions/${parSubId}/resourceGroups/${parRgName}/providers/Microsoft.App/managedEnvironments/ce-sdt-uks-aid-${parEnv}'
 
 param parAlowHttp = true
+
+param parTargetPort = 8000
 
 param parLocation = 'uksouth'
 
@@ -91,16 +139,6 @@ param parDapr = {
 }
 
 param parRoleAssignments = [
-      {
-        principalId: '90082145-1296-4cfd-8b33-066abe5f9dd6'
-        principalType: 'ServicePrincipal'
-        roleDefinitionIdOrName: 'Contributor'
-      }
-      {
-        principalId: '1af95bfa-a983-4aaf-b606-67295186ce62'
-        principalType: 'ServicePrincipal'
-        roleDefinitionIdOrName: 'Contributor'
-      }
     ]
 
 param parIPRules = []
