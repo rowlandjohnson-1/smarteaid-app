@@ -38,7 +38,7 @@ resource storageAccountExisting 'Microsoft.Storage/storageAccounts@2023-01-01' e
 
 var varSaCs = 'DefaultEndpointsProtocol=https;AccountName=${parSaName};AccountKey=${storageAccountExisting.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
-module keyVaultSecretModule '../modules/KeyVaultSecret.bicep' = {
+module keyVaultSecretModule '../modules/keyVaultSecret.bicep' = {
   scope: resourceGroup(parSubId, parRgName)
   name: 'setKeyVaultSecret'
   params: {
