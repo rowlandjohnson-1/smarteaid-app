@@ -157,7 +157,7 @@ var varAcrCredentials = acr.listCredentials('2025-04-01')
 // Extract the ACR admin password
 var varAcrAdminPassword = varAcrCredentials.passwords[0].value
 
-module keyVaultSecretModule '../modules/KeyVaultSecret.bicep' = {
+module keyVaultSecretModule '../modules/keyVaultSecret.bicep' = {
   scope: resourceGroup(parKvSubId, parKvRgName)
   name: 'setKeyVaultSecret'
   params: {
