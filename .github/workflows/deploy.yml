@@ -4,7 +4,6 @@ on:
     push:
         branches:
             - main
-            - mohammed
     workflow_dispatch:
         inputs:
             environment:

@@ -1,12 +1,6 @@
 name: Build and Deploy Backend API
 
 on:
-  push:
-    branches:
-      - main # Trigger dev/stg on push to main
-      # Add other branches if needed, e.g., 'develop'
-    tags:
-      - 'v*.*.*' # Trigger prod on version tags (e.g., v1.0.0)
   workflow_call:
     inputs:
       environment:
