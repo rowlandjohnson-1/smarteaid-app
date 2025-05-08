@@ -108,6 +108,13 @@ jobs:
       with:
         inlineScript:
           az deployment sub create --name "keyVaultDeploy" --location "uksouth" --template-file ".\infra\keyVault\kv.bicep" --parameters ".\infra\keyVault\params\devKv.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
+    
+    - name: Deploy Key Vault Secret Push
+      uses: azure/cli@v1
+      with:
+        inlineScript: |
+          az keyvault secret set --vault-name "kv-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --name "stripe-secret-key" --value "dummy"
+          az keyvault secret set --vault-name "kv-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --name "kinde-clinet-secret" --value "dummy"
 
     - name: Deploy MongoDb
       uses: azure/cli@v1
