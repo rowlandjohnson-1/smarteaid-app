@@ -64,16 +64,6 @@ jobs:
                 azcliversion: 2.63.0
                 inlineScript: |
                   az containerapp update --name "ca-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --resource-group "rg-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --image "acrsdtuksaid${{ github.event.inputs.environment || inputs.environment }}.azurecr.io/backend-api:${{ github.event.inputs.image_tag || inputs.image_tag }}"
-
-            - name: Verify Azure Login Identity
-              run: |
-                echo "Checking logged in Azure CLI identity..."
-                az account show --query user --output table
-                echo "Checking logged in Service Principal (if applicable)..."
-                az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
-                # This uses the secret from the environment the job is linked to
-                az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
-                shell: bash
         
             - name: Azure Logout
               run: az logout
