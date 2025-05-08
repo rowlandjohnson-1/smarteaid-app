@@ -1,0 +1,30 @@
+name: Deploy
+
+on:
+    push:
+        branches:
+            - main
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: 'Target environment (dev1, dev, stg, prod)'
+                required: true
+                default: 'dev1' # Default value, adjust as needed
+                type: choice
+                options:
+                    - dev1
+                    - dev
+                    - stg
+                    - prod
+            image_tag:
+                description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+                required: true
+                default: 'latest' # Default value, adjust as needed
+                type: string
+
+jobs:
+    deploy-infra:
+        uses: ./.github/workflows/azure-infra-deploy.yml
+        with:
+            environment: '${{ github.event.inputs.environment }}'
+            image_tag: ${{ github.event.inputs.image_tag }}
