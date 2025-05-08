@@ -22,6 +22,10 @@ on:
                 default: 'latest' # Default value, adjust as needed
                 type: string
 
+permissions:
+    id-token: write # May be needed by azure/login internally
+    contents: read  # To checkout the code
+    
 jobs:
     deploy-infra:
         uses: ./.github/workflows/azure-infra-deploy.yml
