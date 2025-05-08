@@ -33,3 +33,4 @@ jobs:
         with:
             environment: '${{ github.event.inputs.environment }}'
             image_tag: ${{ github.event.inputs.image_tag }}
+        secrets: inherit
