@@ -1,24 +1,33 @@
-name: Deploy Container to Azure
+name: Update Container App
 
 on:
-  workflow_call:
-    inputs:
-      environment:
-        description: 'Target environment (dev1, dev, stg, prod)'
-        required: true
-        default: 'dev1' # Default value, adjust as needed
-        type: string
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Target environment (dev1, dev, stg, prod)'
-        required: true
-        type: choice
-        options: # <-- Ensure this list matches your desired environment names
-          - dev1
-          - dev
-          - staging
-          - prod
+    workflow_call:
+      inputs:
+        environment:
+          description: 'Target environment (dev1, dev, stg, prod)'
+          required: true
+          default: 'dev1' # Default value, adjust as needed
+          type: string
+        image_tag:
+          description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+          required: true
+          default: 'latest' # Default value, adjust as needed
+          type: string
+    workflow_dispatch:
+      inputs:
+        environment:
+          description: 'Target environment (dev1, dev, stg, prod)'
+          required: true
+          type: choice
+          options: # <-- Ensure this list matches your desired environment names
+            - dev1
+            - dev
+            - staging
+            - prod
+        image_tag:
+          description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+          required: true
+          default: 'latest' # Default value, adjust as needed
 
 jobs:
     deploy-container-infra:
@@ -42,17 +51,19 @@ jobs:
                 az bicep version
               continue-on-error: true # Allow to continue even if Bicep is already managed by az cli
 
-            - name: Deploy Container App Env
-              uses: azure/cli@v1
+            - name: Set Subscription
+              uses: azure/CLI@v2
               with:
+                azcliversion: 2.63.0
                 inlineScript:
-                 az deployment sub create --name "containerAppEnvDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerEnv.bicep" --parameters '.\infra\containerApp\params\containerEnvDev.bicepparam' --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
-
-            - name: Deploy Container App
-              uses: azure/cli@v1
+                  az account set --subscription "${{ secrets.SUBSCRIPTION_ID }}"
+        
+            - name: Update container app
+              uses: azure/CLI@v2
               with:
-                inlineScript:
-                 az deployment sub create --name "containerAppEnvDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerEnv.bicep" --parameters '.\infra\containerApp\params\containerEnvDev.bicepparam' --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
+                azcliversion: 2.63.0
+                inlineScript: |
+                  az containerapp update --name "ca-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }} --resource-group "rg-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --image acrsdtuksaid${{ github.event.inputs.environment || inputs.environment }}.azurecr.io/backend-api:${{ github.event.inputs.image_tag || inputs.image_tag }}
 
             - name: Verify Azure Login Identity
               run: |

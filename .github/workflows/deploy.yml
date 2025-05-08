@@ -67,3 +67,12 @@ jobs:
         with:
           environment: ${{ github.event.inputs.environment || 'dev1' }}
         secrets: inherit
+
+    push-to-container:
+        needs: deploy-container # Ensure container is deployed first
+        if: ${{ success() || needs.deploy-container.result == 'skipped' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
+        uses: ./.github/workflows/update-container.yml
+        with:
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
+          image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+        secrets: inherit
