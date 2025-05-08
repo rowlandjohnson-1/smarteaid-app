@@ -42,6 +42,7 @@ jobs:
                       - 'infra/**' # Tracks changes inside the 'infra' folder
     deploy-infra:
         if: ${{ needs.get-changes.outputs.infra_bicep == 'true' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
+        needs: get-changes
         uses: ./.github/workflows/azure-infra-deploy.yml
         with:
           environment: ${{ github.event.inputs.environment || 'dev1' }}
