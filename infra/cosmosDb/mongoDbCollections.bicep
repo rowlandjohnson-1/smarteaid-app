@@ -57,11 +57,6 @@ resource schoolsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabas
         // Add other specific indexes for schools if needed based on common queries
       ]
     }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
-    }
   }
 }
 
@@ -106,11 +101,6 @@ resource teachersCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDataba
         }
       ]
     }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
-    }
   }
 }
 
@@ -146,11 +136,6 @@ resource classgroupsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDat
           }
         }
       ]
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
     }
   }
 }
@@ -210,11 +195,6 @@ resource studentsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDataba
         // Consider text indexes if full-text search is needed, or ensure queries are anchored (^).
       ]
     }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
-    }
   }
   // Example of a compound unique index (if needed for students)
   // Make sure to check exact syntax for unique compound keys in Cosmos MongoDB Bicep
@@ -254,11 +234,6 @@ resource assignmentsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDat
           }
         }
       ]
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
     }
   }
 }
@@ -340,11 +315,6 @@ resource documentsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDatab
         }
       ]
     }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
-    }
   }
 }
 
@@ -384,11 +354,6 @@ resource resultsCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabas
         // For example, (teacher_id, status, score) is a prefix of the above.
       ]
     }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
-    }
   }
 }
 
@@ -410,11 +375,6 @@ resource batchesCollection 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabas
         }
         // Add other indexes if common query patterns for batches emerge
       ]
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: autoscaleMaxThroughput
-      }
     }
   }
 }
