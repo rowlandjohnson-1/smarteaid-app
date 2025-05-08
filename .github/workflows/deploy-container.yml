@@ -56,17 +56,7 @@ jobs:
               uses: azure/cli@v1
               with:
                 inlineScript:
-                 az deployment sub create --name "containerAppEnvDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerEnv.bicep" --parameters '.\infra\containerApp\params\containerEnvDev.bicepparam' --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
-
-            - name: Verify Azure Login Identity
-              run: |
-                echo "Checking logged in Azure CLI identity..."
-                az account show --query user --output table
-                echo "Checking logged in Service Principal (if applicable)..."
-                az ad signed-in-user show --query id --output tsv || echo "Not logged in as a user"
-                # This uses the secret from the environment the job is linked to
-                az ad sp show --id ${{ secrets.AZURE_CLIENT_ID }} --query appDisplayName --output tsv || echo "SP info check failed for secrets.AZURE_CLIENT_ID"
-                shell: bash
+                 az deployment sub create --name "containerAppDeployDev" --location "uksouth" --template-file ".\infra\containerApp\containerApp.bicep" --parameters '.\infra\containerApp\params\containerAppDev.bicepparam' --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
         
             - name: Azure Logout
               run: az logout
