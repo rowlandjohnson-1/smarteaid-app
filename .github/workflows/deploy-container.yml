@@ -1,5 +1,9 @@
 name: Deploy Container to Azure
 
+concurrency:
+  group: deploy-container-${{ github.event.inputs.environment || inputs.environment }}
+  cancel-in-progress: true
+
 on:
   workflow_call:
     inputs:

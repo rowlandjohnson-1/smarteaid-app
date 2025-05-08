@@ -1,5 +1,9 @@
 name: Deploy Azure Infrastructure
 
+concurrency:
+  group: infra-deploy-${{ github.event.inputs.environment || inputs.environment }}
+  cancel-in-progress: true # Cancel any in-progress runs for the same environment
+
 # Allow manual triggering from the GitHub Actions UI ONLY
 on:
   workflow_call:

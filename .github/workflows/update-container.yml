@@ -1,5 +1,9 @@
 name: Update Container App
 
+concurrency:
+  group: update-container-${{ github.event.inputs.environment || inputs.environment }}
+  cancel-in-progress: true
+
 on:
     workflow_call:
       inputs:

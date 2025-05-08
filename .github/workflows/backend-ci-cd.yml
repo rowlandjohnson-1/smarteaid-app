@@ -1,5 +1,9 @@
 name: Build and Deploy Backend API
 
+concurrency:
+  group: backend-api-${{ github.event.inputs.environment || inputs.environment }} # Unique group for this workflow
+  cancel-in-progress: true # Cancel any in-progress runs for the same ref
+
 on:
   workflow_call:
     inputs:
