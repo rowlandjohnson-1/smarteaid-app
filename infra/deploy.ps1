@@ -14,9 +14,6 @@ az deployment sub create --name "mongoDBDeployDev" --location "uksouth" --templa
 az deployment sub create --name "mongoDBDeployStaging" --location "uksouth" --template-file ".\bicep\cosmosDb\mongo.bicep" --parameters '.\bicep\cosmosDb\params\mongoStaging.bicepparam'
 az deployment sub create --name "mongoDBDeployProd" --location "uksouth" --template-file ".\bicep\cosmosDb\mongo.bicep" --parameters '.\bicep\cosmosDb\params\mongoProd.bicepparam'
 
-//Deploy Mongo Collections
-az deployment group create --name "mongoCollectionsDeployDev" -g 'rg-sdt-uks-aid-dev1' --template-file ".\infra\cosmosDb\mongoDbCollections.bicep"
-
 //Deploy ACR
 az deployment sub create --name "acrDeployDev" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters '.\infra\containerRegistry\params\acrDev.bicepparam'
 az deployment sub create --name "acrDeployStaging" --location "uksouth" --template-file ".\bicep\containerRegistry\acr.bicep" --parameters '.\bicep\containerRegistry\params\acrStaging.bicepparam'
