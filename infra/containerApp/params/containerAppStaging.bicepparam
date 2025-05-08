@@ -82,22 +82,22 @@ param parSecretList = [
       ]
 
 param parProbes01 = [
-            {
-              type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 45
-              periodSeconds: 30
-              failureThreshold: 3
-              timeoutSeconds: 10
-            }
-            {
-              type: 'Readiness'
-              httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 60
-              periodSeconds: 30
-              failureThreshold: 3
-              timeoutSeconds: 15
-            }
+            // {
+            //   type: 'Liveness'
+            //   httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
+            //   initialDelaySeconds: 45
+            //   periodSeconds: 30
+            //   failureThreshold: 3
+            //   timeoutSeconds: 10
+            // }
+            // {
+            //   type: 'Readiness'
+            //   httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
+            //   initialDelaySeconds: 60
+            //   periodSeconds: 30
+            //   failureThreshold: 3
+            //   timeoutSeconds: 15
+            // }
         ]
 
 param parContainerName01 = 'container-sdt-uks-aid-${parEnv}'

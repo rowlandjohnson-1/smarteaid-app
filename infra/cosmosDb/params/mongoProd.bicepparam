@@ -4,6 +4,8 @@ param parLocation =  'uksouth'
 
 param parLockName = 'deleteLock'
 
+// param parServerVersion = '7.0'
+
 // param parLogAnalyticsWorkspaceId = '/subscriptions/fb011ea5-e0b1-4726-b564-8b1d296fb978/resourceGroups/rg-sdt-uks-logging-${parEnv}/providers/Microsoft.OperationalInsights/workspaces/log-sdt-uks-mgmt-${parEnv}'
 
 param parMongoDbAccountName =  'mongo-sdt-uks-aid-${parEnv}'

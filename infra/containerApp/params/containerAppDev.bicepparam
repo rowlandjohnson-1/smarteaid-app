@@ -25,6 +25,7 @@ param parEnvVariables01 = [
   {
     name: 'MONGODB_URL'
     secretRef: 'cosmos-db-connection-string'
+    // value: 'mongodb://cosmos-sdt-uks-aidetector-dev-2sqnu5js6ahlw:BxElpPHLdWJpyC9hdK8Go8q7k2jibQnN4p80SGYO5rlHi6b3Dvvz0dJwtIqMPgNmKmSbgc7gUlojACDbJRZupw==@cosmos-sdt-uks-aidetector-dev-2sqnu5js6ahlw.mongo.cosmos.azure.com:10255/?ssl=true&replicaSet=globaldb&retrywrites=false&maxIdleTimeMS=120000&appName=@cosmos-sdt-uks-aidetector-dev-2sqnu5js6ahlw@'
   }
   {
     name: 'KINDE_CLIENT_SECRET'
@@ -49,6 +50,7 @@ param parEnvVariables01 = [
   {
     name: 'MONGO_DATABASE_NAME'
     value: 'aidetector_${parEnv}'
+    // value: 'aidetector_dev'
   }
 ]
 
@@ -82,22 +84,22 @@ param parSecretList = [
       ]
 
 param parProbes01 = [
-            {
-              type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 45
-              periodSeconds: 30
-              failureThreshold: 3
-              timeoutSeconds: 10
-            }
-            {
-              type: 'Readiness'
-              httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
-              initialDelaySeconds: 60
-              periodSeconds: 30
-              failureThreshold: 3
-              timeoutSeconds: 15
-            }
+            // {
+            //   type: 'Liveness'
+            //   httpGet: { path: '/healthz', port: 8000, scheme: 'HTTP' }
+            //   initialDelaySeconds: 45
+            //   periodSeconds: 30
+            //   failureThreshold: 3
+            //   timeoutSeconds: 10
+            // }
+            // {
+            //   type: 'Readiness'
+            //   httpGet: { path: '/readyz', port: 8000, scheme: 'HTTP' }
+            //   initialDelaySeconds: 60
+            //   periodSeconds: 30
+            //   failureThreshold: 3
+            //   timeoutSeconds: 15
+            // }
         ]
 
 param parContainerName01 = 'container-sdt-uks-aid-${parEnv}'

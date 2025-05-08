@@ -44,6 +44,8 @@ param parMongoCsSecretName string
 
 param parEnv string
 
+// param parServerVersion string
+
 // resource mongoPrivDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing =  {
 //   name: 'privatelink.mongo.cosmos.azure.com'
 //   scope: resourceGroup(parDnsSubId, parDnsRgName)
@@ -55,6 +57,7 @@ module mongoDB 'br/public:avm/res/document-db/database-account:0.6.0' = {
   params: {
     // Required parameters
     name: parMongoDbAccountName
+    // serverVersion: parServerVersion
     // Non-required parameters
     capabilitiesToAdd: [
       'EnableMongo'
