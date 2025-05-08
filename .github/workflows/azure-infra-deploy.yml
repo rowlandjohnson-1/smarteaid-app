@@ -81,36 +81,36 @@ jobs:
         echo "imageName=${FULL_IMAGE_NAME}" >> $GITHUB_OUTPUT
 
     # 5. Deploy Bicep template at Subscription scope - Uses correct secrets via environment link
-    - name: Deploy Bicep File
+    - name: Deploy Managed Identity
       uses: azure/cli@v1
       with:
-        inlineScript: |
-          echo "Starting Bicep deployment for environment: ${{ github.event.inputs.environment }}"
-          echo "Using container image: ${{ steps.image_name.outputs.imageName }}"
+        inlineScript:
+         az deployment sub create --name "userMIDeploy" --location "uksouth" --template-file ".\infra\managedIdentities\mi.bicep" --parameters ".\infra\managedIdentities\params\miDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
 
-          # Define deployment location
-          DEPLOYMENT_LOCATION="uksouth" # Or your preferred Azure region
+    - name: Deploy Key Vault
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "keyVaultDeploy" --location "uksouth" --template-file ".\infra\keyVault\kv.bicep" --parameters ".\infra\keyVault\params\devKv.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
 
-          # Run the deployment command with dynamic parameters ONLY via --parameters key=value
-          az deployment sub create \
-            --name "infra-deploy-${{ github.event.inputs.environment }}-${{ github.run_id }}" \
-            --location ${DEPLOYMENT_LOCATION} \
-            --template-file ./infra/main.bicep \
-            --parameters environment=${{ github.event.inputs.environment }} \
-            --parameters containerImage='${{ steps.image_name.outputs.imageName }}' \
-            --parameters mongoDbUrl='${{ secrets.MONGODB_URL }}' \
-            --parameters kindeClientSecret='${{ secrets.KINDE_CLIENT_SECRET }}' \
-            --parameters stripeSecretKey='${{ secrets.STRIPE_SECRET_KEY }}' \
-            --parameters storageConnectionString='${{ secrets.STORAGE_CONNECTION_STRING }}' \
-            --parameters kindeAudience='${{ secrets.KINDE_AUDIENCE }}' \
-            --parameters kindeDomain='${{ secrets.KINDE_DOMAIN }}' \
-            --parameters deploymentSuffix='${{ github.run_id }}' \
-            --debug
-            # Add any other parameters defined in main.bicep here if they aren't handled by defaults/conditionals
-            # e.g. --parameters companyPrefix='sdt' purpose='aidetector' location='uksouth' (if not using defaults)
+    - name: Deploy MongoDb with collections
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "mongoDBDeployDev" --location "uksouth" --template-file ".\infra\cosmosDb\mongo.bicep" --parameters ".\infra\cosmosDb\params\mongoDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
 
-          echo "Bicep deployment attempt for ${{ github.event.inputs.environment }} finished."
+    - name: Deploy ACR
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters ".\infra\containerRegistry\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
 
+    - name: Deploy Storage Account
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "storageAccountDeploy" --location "uksouth" --template-file ".\infra\storageAccount\sa.bicep" --parameters ".\infra\storageAccount\params\saDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          
     # 6. Verify Azure Login Identity (Keep this for debugging)
     - name: Verify Azure Login Identity
       run: |

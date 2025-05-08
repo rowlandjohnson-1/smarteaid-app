@@ -4,8 +4,10 @@
 // - Note: Soft delete is automatically enabled when purge protection is enabled.
 //   The 'softDeleteRetentionInDays' property is still relevant.
 
+targetScope = 'resourceGroup'
+
 @description('Company prefix for resource names.')
-param companyPrefix string
+param companyPrefix string = 'sdt'
 
 @description('The purpose of the resources being deployed (e.g., app name).')
 param purpose string
@@ -59,6 +61,10 @@ param kindeDomain string
 @description('Required. Kinde audience for authentication.')
 param kindeAudience string
 
+param parSubId string = '50a7d228-9d3a-4067-bb57-aab272dfe934'
+
+param parRgName string = 'rg-sdt-uks-aidetector-dev1'
+
 // --- Variables ---
 var uniqueSeed = uniqueString(resourceGroup().id)
 var shortUniqueSeed = take(uniqueSeed, 8)
@@ -82,6 +88,8 @@ var secretNameStorageConnectionString = 'storage-connection-string'
 
 var keyVaultSecretsUserRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var acrPullRoleDefinitionId = resourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+
+var varUserAssignedIdentity = '/subscriptions/${parSubId}/resourcegroups/${parRgName}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${userAssignedIdentity.name}'
 
 // --- Resource Definitions ---
 
@@ -190,8 +198,41 @@ resource cae 'Microsoft.App/managedEnvironments@2023-05-01' = {
   }
 }
 
+module userAssignedIdentity 'br/public:avm/res/managed-identity/user-assigned-identity:0.4.0' = {
+  scope: resourceGroup(parSubId, parRgName)
+  name: 'userAssignedIdentityDeployment'
+  params: {
+    // Required parameters
+    name: 'mi-sdt-uks-ca-${environment}'
+    // Non-required parameters
+    location: location
+  }
+}
+
+// Assign AcrPull role to the user-assigned managed identity for the ACR
+module acrRoleAssignment './modules/roleAssignment.bicep' = {
+  scope: resourceGroup(parSubId, parRgName)
+  name: 'roleAssignmentAcrDeploy'
+  params: {
+    parAssigneeObjectId: varUserAssignedIdentity
+    parAssigneePrincipalType: 'ServicePrincipal'
+    parRoleDefinitionId: acrPullRoleDefinitionId
+  }
+}
+
+// Assign Key Vault Secrets User role to the user-assigned managed identity for the Key Vault
+module keyVaultRoleAssignment './modules/roleAssignment.bicep' = {
+  scope: resourceGroup(parSubId, parRgName)
+  name: 'roleAssignmentKvDeploy'
+  params: {
+    parAssigneeObjectId: varUserAssignedIdentity
+    parAssigneePrincipalType: 'ServicePrincipal'
+    parRoleDefinitionId: keyVaultSecretsUserRoleDefinitionId
+  }
+}
+
 // Container App
-resource ca 'Microsoft.App/containerApps@2023-05-01' = {
+resource ca 'Microsoft.App/containerApps@2025-01-01' = {
   name: containerAppName
   location: location
   tags: {
@@ -200,11 +241,21 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
     purpose: purpose
   }
   identity: {
-    type: 'SystemAssigned'
+    type: 'SystemAssigned,UserAssigned'
+    userAssignedIdentities: {
+      '${varUserAssignedIdentity}': {
+      }
+    }
   }
   properties: {
     managedEnvironmentId: cae.id
     configuration: {
+      identitySettings: [
+        {
+          identity: varUserAssignedIdentity
+          lifecycle: 'All'
+        }
+      ]
       registries: [
         {
           server: acrLoginServer
@@ -267,29 +318,12 @@ resource ca 'Microsoft.App/containerApps@2023-05-01' = {
       }
     }
   }
+  dependsOn: [
+    keyVaultRoleAssignment
+    acrRoleAssignment
+  ]
 }
 
-// Role Assignment: Grant Container App AcrPull role on the ACR
-resource acrRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, ca.id, acrPullRoleDefinitionId)
-  scope: acr
-  properties: {
-    roleDefinitionId: acrPullRoleDefinitionId
-    principalId: ca.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Role Assignment: Grant Container App Key Vault Secrets User role on the Key Vault
-resource kvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kv.id, ca.id, keyVaultSecretsUserRoleDefinitionId)
-  scope: kv
-  properties: {
-    roleDefinitionId: keyVaultSecretsUserRoleDefinitionId
-    principalId: ca.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
 
 // --- Outputs ---
 output keyVaultName string = kv.name
