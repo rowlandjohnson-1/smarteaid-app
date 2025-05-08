@@ -1,4 +1,4 @@
-name: Deploy full
+name: Deploy full pipeline
 
 on:
     push:
