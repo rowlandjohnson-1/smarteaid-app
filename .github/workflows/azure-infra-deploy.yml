@@ -97,31 +97,31 @@ jobs:
       uses: azure/cli@v1
       with:
         inlineScript:
-         az deployment sub create --name "userMIDeploy" --location "uksouth" --template-file ".\infra\managedIdentities\mi.bicep" --parameters ".\infra\managedIdentities\params\miDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+         az deployment sub create --name "userMIDeploy" --location "uksouth" --template-file ".\infra\managedIdentities\mi.bicep" --parameters ".\infra\managedIdentities\params\miDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
 
     - name: Deploy Key Vault
       uses: azure/cli@v1
       with:
         inlineScript:
-          az deployment sub create --name "keyVaultDeploy" --location "uksouth" --template-file ".\infra\keyVault\kv.bicep" --parameters ".\infra\keyVault\params\devKv.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          az deployment sub create --name "keyVaultDeploy" --location "uksouth" --template-file ".\infra\keyVault\kv.bicep" --parameters ".\infra\keyVault\params\devKv.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
 
     - name: Deploy MongoDb with collections
       uses: azure/cli@v1
       with:
         inlineScript:
-          az deployment sub create --name "mongoDBDeployDev" --location "uksouth" --template-file ".\infra\cosmosDb\mongo.bicep" --parameters ".\infra\cosmosDb\params\mongoDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          az deployment sub create --name "mongoDBDeployDev" --location "uksouth" --template-file ".\infra\cosmosDb\mongo.bicep" --parameters ".\infra\cosmosDb\params\mongoDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
 
     - name: Deploy ACR
       uses: azure/cli@v1
       with:
         inlineScript:
-          az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters ".\infra\containerRegistry\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters ".\infra\containerRegistry\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
 
     - name: Deploy Storage Account
       uses: azure/cli@v1
       with:
         inlineScript:
-          az deployment sub create --name "storageAccountDeploy" --location "uksouth" --template-file ".\infra\storageAccount\sa.bicep" --parameters ".\infra\storageAccount\params\saDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment }}"
+          az deployment sub create --name "storageAccountDeploy" --location "uksouth" --template-file ".\infra\storageAccount\sa.bicep" --parameters ".\infra\storageAccount\params\saDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
           
     # 6. Verify Azure Login Identity (Keep this for debugging)
     - name: Verify Azure Login Identity
