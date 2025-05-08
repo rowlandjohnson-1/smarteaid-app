@@ -31,6 +31,6 @@ jobs:
     deploy-infra:
         uses: ./.github/workflows/azure-infra-deploy.yml
         with:
-            environment: '${{ github.event.inputs.environment }}'
-            image_tag: ${{ github.event.inputs.image_tag }}
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
+          image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
         secrets: inherit
