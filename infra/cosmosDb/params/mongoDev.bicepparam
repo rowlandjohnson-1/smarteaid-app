@@ -4,104 +4,106 @@ param parLocation =  'uksouth'
 
 param parMongoDbName =  'aidetector_${parEnv}'
 
-var shardKey = {
-  keys: [
-    '_id'
-  ]
-}
+// param parServerVersion = '7.0'
+
+// var shardKey = {
+//   keys: [
+//     '_id'
+//   ]
+// }
 
 param parMongoCollections = [
-  {
-    name: 'batches'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
-  {
-    name: 'classgroups'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
-  {
-    name: 'documents'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
-  {
-    name: 'results'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-  ]
-    shardKey: shardKey
-  }
-  {
-    name: 'students'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
-  {
-    name: 'teachers'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
-  {
-    name: 'users'
-    indexes: [
-      {
-      key: {
-        keys: [
-          '_id'
-        ]
-      }
-    }
-    ]
-    shardKey: shardKey
-  }
+  // {
+  //   name: 'batches'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'classgroups'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'documents'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'results'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  // ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'students'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'teachers'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
+  // {
+  //   name: 'users'
+  //   indexes: [
+  //     {
+  //     key: {
+  //       keys: [
+  //         '_id'
+  //       ]
+  //     }
+  //   }
+  //   ]
+  //   shardKey: shardKey
+  // }
 ]
 
 param parLockName = 'deleteLock'

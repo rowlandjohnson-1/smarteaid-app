@@ -2,6 +2,7 @@ name: Deploy Azure Infrastructure
 
 # Allow manual triggering from the GitHub Actions UI ONLY
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       environment:
