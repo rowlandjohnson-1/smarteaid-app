@@ -7,6 +7,18 @@ on:
       # Add other branches if needed, e.g., 'develop'
     tags:
       - 'v*.*.*' # Trigger prod on version tags (e.g., v1.0.0)
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (dev, stg, prod, dev1)'
+        required: true
+        default: 'dev1' # Default value, adjust as needed
+        type: string
+      image_tag:
+        description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+        required: true
+        default: 'latest' # Default value, adjust as needed
+        type: string
   workflow_dispatch: # Allow manual trigger
     inputs:
       environment:
@@ -15,7 +27,7 @@ on:
         type: choice
         options:
           - dev
-          - stg
+          - staging
           - prod
           - dev1
       image_tag:
@@ -42,21 +54,19 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # Pushes to main now go to dev1
-            echo "environment=dev1" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
+            # Pushes to main now go to ${{ inputs.environment}}
+            echo "environment=${{ inputs.environment}}" >> $GITHUB_OUTPUT
           else
-            echo "Unsupported trigger ref: ${{ github.ref }}. Defaulting to dev1."
-            echo "environment=dev1" >> $GITHUB_OUTPUT # Defaulting to dev1 for other cases too
+            echo "Unsupported trigger ref: ${{ github.ref }}. Defaulting to ${{ inputs.environment}}."
+            echo "environment=${{ inputs.environment}}" >> $GITHUB_OUTPUT # Defaulting to ${{ inputs.environment}} for other cases too
           fi
 
       - name: Set Image Tag
         id: set_tag
         run: |
-          if [[ "${{ github.event.inputs.image_tag }}" != "" ]]; then
-            echo "Using manual input tag: ${{ github.event.inputs.image_tag }}"
-            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event.inputs.image_tag || inputs.image_tag }}" != "" ]]; then
+            echo "Using manual input tag: ${{ github.event.inputs.image_tag || inputs.image_tag }}"
+            echo "image_tag=${{ github.event.inputs.image_tag || inputs.image_tag }}" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/tags/v*.*.* ]]; then
             TAG_NAME=$(echo "${{ github.ref }}" | sed 's#refs/tags/##')
             echo "Using Git tag: ${TAG_NAME}"
@@ -106,8 +116,8 @@ jobs:
           tags: |
             # Use the specific tag determined in the previous job
             ${{ needs.determine_environment.outputs.image_tag }}
-            # Optionally add 'latest' tag for dev/stg/dev1 builds
-            type=raw,value=latest,enable=${{ needs.determine_environment.outputs.environment == 'dev' || needs.determine_environment.outputs.environment == 'stg' || needs.determine_environment.outputs.environment == 'dev1' }}
+            # Optionally add 'latest' tag for dev/stg/${{ inputs.environment}} builds
+            type=raw,value=latest,enable=${{ needs.determine_environment.outputs.environment == 'dev' || needs.determine_environment.outputs.environment == 'stg' || needs.determine_environment.outputs.environment == '${{ inputs.environment}}' }}
 
       # Login to Azure Container Registry (using the SP credentials from GitHub Environment Secrets)
       - name: Login to Azure Container Registry

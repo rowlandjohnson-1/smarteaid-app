@@ -15,7 +15,7 @@ on:
                 options:
                     - dev1
                     - dev
-                    - stg
+                    - staging
                     - prod
             image_tag:
                 description: 'Docker image tag to configure (e.g., latest, commit SHA)'
@@ -28,8 +28,29 @@ permissions:
     contents: read  # To checkout the code
 
 jobs:
+    get-changes:
+        runs-on: ubuntu-latest
+        outputs:
+            infra_bicep: ${{ steps.get-changes.outputs.infra_bicep }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dorny/paths-filter@v3
+              id: get-changes
+              with:
+                filters: |
+                    infra_bicep:
+                      - 'infra/**' # Tracks changes inside the 'infra' folder
     deploy-infra:
+        if: ${{ needs.get-changes.outputs.infra_bicep == 'true' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
         uses: ./.github/workflows/azure-infra-deploy.yml
+        with:
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
+          image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+        secrets: inherit
+
+    deploy-backend:
+        needs: deploy-infra
+        uses: ./.github/workflows/backend-ci-cd.yml
         with:
           environment: ${{ github.event.inputs.environment || 'dev1' }}
           image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
