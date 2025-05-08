@@ -1,9 +1,10 @@
-name: Deploy
+name: Deploy full pipeline
 
 on:
     push:
         branches:
             - main
+            - mohammed
     workflow_dispatch:
         inputs:
             environment:
@@ -14,7 +15,7 @@ on:
                 options:
                     - dev1
                     - dev
-                    - stg
+                    - staging
                     - prod
             image_tag:
                 description: 'Docker image tag to configure (e.g., latest, commit SHA)'
@@ -22,9 +23,37 @@ on:
                 default: 'latest' # Default value, adjust as needed
                 type: string
 
+permissions:
+    id-token: write # May be needed by azure/login internally
+    contents: read  # To checkout the code
+
 jobs:
+    get-changes:
+        runs-on: ubuntu-latest
+        outputs:
+            infra_bicep: ${{ steps.get-changes.outputs.infra_bicep }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dorny/paths-filter@v3
+              id: get-changes
+              with:
+                filters: |
+                    infra_bicep:
+                      - 'infra/**' # Tracks changes inside the 'infra' folder
     deploy-infra:
+        if: ${{ needs.get-changes.outputs.infra_bicep == 'true' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
+        needs: get-changes
         uses: ./.github/workflows/azure-infra-deploy.yml
         with:
-            environment: '${{ github.event.inputs.environment }}'
-            image_tag: ${{ github.event.inputs.image_tag }}
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
+          image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+        secrets: inherit
+
+    deploy-backend:
+        needs: deploy-infra # Ensure infra is deployed first
+        if: ${{ success() || needs.deploy-infra.result == 'skipped' || github.event_name == 'workflow_dispatch' }}  # Runs if manually triggered or infra changes detected
+        uses: ./.github/workflows/backend-ci-cd.yml
+        with:
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
+          image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+        secrets: inherit
