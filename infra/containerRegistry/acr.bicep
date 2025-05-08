@@ -52,13 +52,7 @@ param parNetworkRuleBypassOptions string
 
 param parIpRules array
 
-param parKvName string
 
-param parKvRgName string
-
-param parKvSecretName string
-
-param parKvSubId string
 
 // resource acrPrivDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' existing =  {
 //   name: 'privatelink.azurecr.io'
@@ -145,27 +139,4 @@ module registry 'br/public:avm/res/container-registry/registry:0.6.0' = {
 //   }
 // }
 
-// Reference the existing Azure Container Registry (ACR)
-resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
-  scope: resourceGroup(parSubId, parRgName)
-  name: parRegistryName
-}
 
-// Retrieve the admin credentials for ACR
-var varAcrCredentials = acr.listCredentials('2025-04-01')
-
-// Extract the ACR admin password
-var varAcrAdminPassword = varAcrCredentials.passwords[0].value
-
-module keyVaultSecretModule '../modules/keyVaultSecret.bicep' = {
-  scope: resourceGroup(parKvSubId, parKvRgName)
-  name: 'setKeyVaultSecret'
-  params: {
-    parKvName: parKvName
-    parSecretName: parKvSecretName
-    parSecretValue: varAcrAdminPassword
-  }
-  dependsOn: [
-    registry
-  ]
-}

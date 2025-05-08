@@ -70,11 +70,3 @@ param parIpRules = []
 //           }
 //         }
 //     ]
-
-param parKvName = 'kv-sdt-uks-aid-${parEnv}'
-
-param parKvRgName = 'rg-sdt-uks-aid-${parEnv}'
-
-param parKvSecretName = 'acrsdtuksaid${parEnv}-password'
-
-param parKvSubId = parSubId

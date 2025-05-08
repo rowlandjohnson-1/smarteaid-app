@@ -13,7 +13,3 @@ param parLocation =  'uksouth'
 param parSaName =  'sasdtuksaid${parEnv}'
 
 param parSaKind =  'StorageV2'
-
-param parKvName = 'kv-sdt-uks-aid-${parEnv}'
-
-param parKvSecretName = 'sa-connection-string-${parEnv}'

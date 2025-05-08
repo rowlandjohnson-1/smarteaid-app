@@ -117,11 +117,23 @@ jobs:
         inlineScript:
           az deployment sub create --name "acrDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acr.bicep" --parameters ".\infra\containerRegistry\params\acrDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
 
+    - name: Deploy ACR Secret Push
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "acrSecretDeploy" --location "uksouth" --template-file ".\infra\containerRegistry\acrSecretPush.bicep" --parameters ".\infra\containerRegistry\params\acrSecretPush.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
+
     - name: Deploy Storage Account
       uses: azure/cli@v1
       with:
         inlineScript:
           az deployment sub create --name "storageAccountDeploy" --location "uksouth" --template-file ".\infra\storageAccount\sa.bicep" --parameters ".\infra\storageAccount\params\saDev.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
+
+    - name: Deploy Storage Secret Push
+      uses: azure/cli@v1
+      with:
+        inlineScript:
+          az deployment sub create --name "storageAccountSecretDeploy" --location "uksouth" --template-file ".\infra\storageAccount\saSecretPush.bicep" --parameters ".\infra\storageAccount\params\saSecretPush.bicepparam" --parameters "parEnv=${{ github.event.inputs.environment || inputs.environment }}"
           
     # 6. Verify Azure Login Identity (Keep this for debugging)
     - name: Verify Azure Login Identity
