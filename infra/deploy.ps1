@@ -9,7 +9,7 @@ az deployment sub create --name "keyVaultDeployDev" --location "uksouth" --templ
 az deployment sub create --name "keyVaultDeployStaging" --location "uksouth" --template-file ".\bicep\keyVault\kv.bicep" --parameters '.\bicep\keyVault\params\stagingKv.bicepparam'
 az deployment sub create --name "keyVaultDeployProd" --location "uksouth" --template-file ".\bicep\keyVault\kv.bicep" --parameters '.\bicep\keyVault\params\prodKv.bicepparam'
 
-//Deploy MongoDB
+//Deploy Mongo
 az deployment sub create --name "mongoDBDeployDev" --location "uksouth" --template-file ".\infra\cosmosDb\mongo.bicep" --parameters '.\infra\cosmosDb\params\mongoDev.bicepparam'
 az deployment sub create --name "mongoDBDeployStaging" --location "uksouth" --template-file ".\bicep\cosmosDb\mongo.bicep" --parameters '.\bicep\cosmosDb\params\mongoStaging.bicepparam'
 az deployment sub create --name "mongoDBDeployProd" --location "uksouth" --template-file ".\bicep\cosmosDb\mongo.bicep" --parameters '.\bicep\cosmosDb\params\mongoProd.bicepparam'
