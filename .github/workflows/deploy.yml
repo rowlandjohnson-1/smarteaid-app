@@ -39,6 +39,9 @@ jobs:
                 filters: |
                     infra_bicep:
                       - 'infra/**' # Tracks changes inside the 'infra' folder
+                    infra_bicep_container:
+                      - 'infra/containerApp/**' # Tracks changes inside the 'infra/containerApp' folder
+                    
     deploy-infra:
         if: ${{ needs.get-changes.outputs.infra_bicep == 'true' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
         needs: get-changes
@@ -55,4 +58,12 @@ jobs:
         with:
           environment: ${{ github.event.inputs.environment || 'dev1' }}
           image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+        secrets: inherit
+
+    deploy-container:
+        needs: deploy-backend # Ensure backend is deployed first
+        if: ${{ needs.get-changes.outputs.infra_bicep_container == 'true' || github.event_name == 'workflow_dispatch' }} # Only runs if changes in infra are detected or manually triggered
+        uses: ./.github/workflows/deploy-container.yml
+        with:
+          environment: ${{ github.event.inputs.environment || 'dev1' }}
         secrets: inherit
