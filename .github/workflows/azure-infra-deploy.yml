@@ -3,6 +3,17 @@ name: Deploy Azure Infrastructure
 # Allow manual triggering from the GitHub Actions UI ONLY
 on:
   workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (dev1, dev, stg, prod)'
+        required: true
+        default: 'dev1' # Default value, adjust as needed
+        type: string
+      image_tag:
+        description: 'Docker image tag to configure (e.g., latest, commit SHA)'
+        required: true
+        default: 'latest' # Default value, adjust as needed
+        type: string
   workflow_dispatch:
     inputs:
       environment:
