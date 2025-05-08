@@ -51,7 +51,7 @@ jobs:
 
     deploy-backend:
         needs: deploy-infra # Ensure infra is deployed first
-        if: ${{ success() || github.event_name == 'workflow_dispatch' || needs.deploy-infra.result == 'skipped' }}  # Runs if manually triggered or infra changes detected
+        if: ${{ success() || needs.deploy-infra.result == 'skipped' || github.event_name == 'workflow_dispatch' }}  # Runs if manually triggered or infra changes detected
         uses: ./.github/workflows/backend-ci-cd.yml
         with:
           environment: ${{ github.event.inputs.environment || 'dev1' }}
