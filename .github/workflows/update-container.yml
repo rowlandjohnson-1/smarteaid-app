@@ -63,7 +63,7 @@ jobs:
               with:
                 azcliversion: 2.63.0
                 inlineScript: |
-                  az containerapp update --name "ca-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }} --resource-group "rg-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --image acrsdtuksaid${{ github.event.inputs.environment || inputs.environment }}.azurecr.io/backend-api:${{ github.event.inputs.image_tag || inputs.image_tag }}
+                  az containerapp update --name "ca-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --resource-group "rg-sdt-uks-aid-${{ github.event.inputs.environment || inputs.environment }}" --image "acrsdtuksaid${{ github.event.inputs.environment || inputs.environment }}.azurecr.io/backend-api:${{ github.event.inputs.image_tag || inputs.image_tag }}"
 
             - name: Verify Azure Login Identity
               run: |
