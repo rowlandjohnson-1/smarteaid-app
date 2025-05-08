@@ -1,7 +1,7 @@
 const { MongoClient } = require('mongodb');
 
 // Connection string for your CosmosDB MongoDB API
-const uri = "mongodb://mongo-sdt-uks-aid-dev1:PK8WirVV8QcSuchgUAy1HPMqo6bS3bTe8ae2JLooGDh4AfWFB9sTuhiYrKDjT7g9CsFkp2m2HABtACDbcGSvTA==@mongo-sdt-uks-aid-dev1.mongo.cosmos.azure.com:10255/?ssl=true&replicaSet=globaldb&retrywrites=false&maxIdleTimeMS=120000&appName=@mongo-sdt-uks-aid-dev1@";
+const uri = "";
 
 // Create a new MongoClient
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
