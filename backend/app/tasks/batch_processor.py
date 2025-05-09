@@ -111,12 +111,19 @@ class BatchProcessor:
                 {"$limit": 1}
             ]
             
-            async for batch_dict in db.batches.aggregate(pipeline):
+            logger.info(f"Executing batch query pipeline: {pipeline}")
+            
+            # Get collection and check indexes
+            collection = db.batches
+            indexes = await collection.list_indexes().to_list(length=None)
+            logger.info(f"Available indexes on batches collection: {indexes}")
+            
+            async for batch_dict in collection.aggregate(pipeline):
                 return Batch(**batch_dict)
             
             return None
         except Exception as e:
-            logger.error(f"Error getting next batch: {e}")
+            logger.error(f"Error getting next batch: {e}", exc_info=True)
             return None
 
     async def _process_document(self, document: Document) -> bool:
