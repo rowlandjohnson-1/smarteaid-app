@@ -16,7 +16,6 @@ import asyncio
 from pydantic import ValidationError
 # FIX: Import ResourceNotFoundError from azure.core.exceptions
 from azure.core.exceptions import ResourceNotFoundError 
-from azure.storage.blob import BlobServiceClient
 import os
 import calendar
 
@@ -36,6 +35,9 @@ from app.models.result import Result, ResultCreate, ResultUpdate, ResultStatus
 # --- Import Enums used in Teacher model ---
 from app.models.enums import DocumentStatus, ResultStatus, FileType, MarketingSource
 from app.models.batch import Batch, BatchCreate, BatchUpdate, BatchWithDocuments
+
+# --- Service Imports --- ADD THIS SECTION IF IT DOESN'T EXIST
+from app.services.blob_storage import delete_blob as service_delete_blob # ADD THIS IMPORT
 
 # --- Logging Setup ---
 logger = logging.getLogger(__name__)
@@ -266,6 +268,10 @@ async def create_teacher(
         # Fetch outside the transaction if session is None, or use session if provided
         created_doc = await collection.find_one({"_id": internal_id}, session=session)
         if created_doc:
+            # Convert _id to string BEFORE Pydantic validation if it's a UUID
+            if isinstance(created_doc.get("_id"), uuid.UUID):
+                logger.debug(f"Converting created_doc _id {created_doc['_id']} to string for Pydantic in create_teacher.")
+                created_doc["_id"] = str(created_doc["_id"])
             return Teacher(**created_doc) # Pydantic will handle the _id to id mapping
         else:
             logger.error(f"Failed retrieve teacher post-insert: internal ID {internal_id}"); return None
@@ -976,9 +982,9 @@ async def delete_document(document_id: uuid.UUID, teacher_id: str, session=None)
 
     # --- Delete Blob (Propagate errors) ---
     if blob_path_to_delete:
-        blob_deleted = await delete_blob(blob_path_to_delete)
+        blob_deleted = await service_delete_blob(blob_path_to_delete)
         if not blob_deleted:
-            logger.error(f"delete_blob failed for {blob_path_to_delete}. This might indicate an issue but delete process continues.")
+            logger.error(f"service_delete_blob failed for {blob_path_to_delete}. This might indicate an issue but delete process continues.")
             # Allow continuing, but log clearly
         else:
             logger.info(f"Successfully deleted blob {blob_path_to_delete} for document {document_id}.")
@@ -1753,71 +1759,23 @@ async def delete_batch(*, batch_id: uuid.UUID) -> bool:
         return False
 
 async def delete_result(result_id: uuid.UUID, session=None) -> bool:
-    """
-    Delete a result from the database.
-    
-    Args:
-        result_id: UUID of the result to delete
-        session: Optional database session
-        
-    Returns:
-        bool: True if result was deleted, False otherwise
-    """
+    collection = _get_collection(RESULT_COLLECTION)
+    if collection is None: return False
+    # Soft delete: find and update, setting is_deleted to True
+    # Or hard delete: find and delete
+    # For now, let's assume soft delete (or that Results are hard deleted)
+    logger.info(f"Attempting to delete Result ID: {result_id}")
     try:
-        collection = _get_collection(RESULT_COLLECTION) # FIX: Use _get_collection and correct constant
-        if collection is None: return False # Add check
-        result = await collection.delete_one({"_id": result_id})
-        return result.deleted_count > 0
-    except Exception as e:
-        logger.error(f"Error deleting result {result_id}: {e}")
-        return False
-
-async def delete_blob(blob_path: str) -> bool:
-    """
-    Delete a blob from storage.
-    
-    Args:
-        blob_path: Path of the blob to delete
-        
-    Returns:
-        bool: True if blob was deleted, False otherwise
-    """
-    try:
-        # FIX: Check environment variables first
-        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
-
-        if not connection_string or not container_name:
-            logger.error("Azure Storage connection string or container name not configured.")
-            return False
-
-        # Get blob service client
-        blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-        
-        # Get blob name from path (assuming path might be just the name or full URL)
-        # This logic might need adjustment depending on how storage_blob_path is stored
-        if '/' in blob_path:
-            blob_name = blob_path.split("/")[-1]
+        # Simplistic hard delete for now, adjust as per actual requirements (soft/hard)
+        result = await collection.delete_one({"_id": result_id}, session=session)
+        if result.deleted_count == 1:
+            logger.info(f"Successfully deleted result {result_id}.")
+            return True
         else:
-            blob_name = blob_path # Assume it's just the name
-        
-        # Get blob client and delete
-        blob_client = blob_service_client.get_blob_client(
-            container=container_name,
-            blob=blob_name
-        )
-        # FIX: Check if blob exists before deleting to avoid errors on retries/cleanup
-        if await blob_client.exists():
-            await blob_client.delete_blob()
-            logger.info(f"Successfully deleted blob {container_name}/{blob_name}")
-        else:
-            logger.warning(f"Blob {container_name}/{blob_name} not found, skipping deletion.")
-        return True
-    except ResourceNotFoundError:
-        logger.warning(f"Blob {container_name}/{blob_name} not found during deletion attempt.")
-        return True # Treat as success if blob is already gone
+            logger.warning(f"Result {result_id} not found for deletion or already deleted.")
+            return False # Or True if already deleted is considered success
     except Exception as e:
-        logger.error(f"Error deleting blob {blob_path}: {e}", exc_info=True) # Log traceback
+        logger.error(f"Error deleting result {result_id}: {e}", exc_info=True)
         return False
 
 # <<< START EDIT: Add new analytics CRUD function >>>

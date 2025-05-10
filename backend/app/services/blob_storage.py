@@ -150,3 +150,61 @@ async def download_blob_as_bytes(blob_name: str) -> Optional[bytes]:
 # --- Optional: Add functions for delete, list etc. later if needed ---
 # async def delete_blob(blob_name: str) -> bool: ...
 # async def get_blob_sas_url(blob_name: str) -> Optional[str]: ...
+
+# --- NEW FUNCTION TO DELETE BLOB ---
+async def delete_blob(blob_name_to_delete: str) -> bool:
+    """
+    Deletes a specific blob from Azure Blob Storage.
+
+    Args:
+        blob_name_to_delete: The name of the blob to delete.
+                             It's assumed this is just the blob name (e.g., 'guid.ext')
+                             and not a full path or URL.
+
+    Returns:
+        True if the blob was deleted successfully or was not found (idempotent).
+        False if an error occurred during deletion.
+    """
+    service_client = get_blob_service_client() # Use the async helper
+    if not service_client: # AZURE_BLOB_CONNECTION_STRING is checked in get_blob_service_client
+        # Error already logged by get_blob_service_client if connection string is missing
+        return False
+    
+    if not AZURE_BLOB_CONTAINER_NAME:
+        logger.error("Azure Blob Storage container name (AZURE_BLOB_CONTAINER_NAME) is not configured.")
+        return False
+
+    # Clean the blob name just in case a full path/URL was passed, though the docstring assumes not.
+    # This logic can be simplified if blob_name_to_delete is guaranteed to be just the name.
+    if '/' in blob_name_to_delete:
+        actual_blob_name = blob_name_to_delete.split("/")[-1]
+        logger.warning(f"Full path ('{blob_name_to_delete}') provided to delete_blob, using only name: '{actual_blob_name}'.")
+    else:
+        actual_blob_name = blob_name_to_delete
+
+    logger.info(f"Attempting to delete blob '{actual_blob_name}' from container '{AZURE_BLOB_CONTAINER_NAME}'")
+    try:
+        blob_client: BlobClient = service_client.get_blob_client(
+            container=AZURE_BLOB_CONTAINER_NAME,
+            blob=actual_blob_name
+        )
+
+        # Check if blob exists before attempting deletion for idempotency and clearer logging
+        if await blob_client.exists():
+            await blob_client.delete_blob(delete_snapshots="include") # Ensure snapshots are also deleted
+            logger.info(f"Successfully deleted blob '{actual_blob_name}' from container '{AZURE_BLOB_CONTAINER_NAME}'.")
+        else:
+            logger.warning(f"Blob '{actual_blob_name}' not found in container '{AZURE_BLOB_CONTAINER_NAME}'. Deletion considered successful (idempotent).")
+        return True
+
+    except ResourceNotFoundError:
+        # This might be redundant if blob_client.exists() is used, but good for safety
+        logger.warning(f"Blob '{actual_blob_name}' not found during deletion attempt (ResourceNotFoundError). Considered successful.")
+        return True
+    except AzureError as ae:
+        logger.error(f"Azure error deleting blob '{actual_blob_name}': {ae}", exc_info=False)
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error deleting blob '{actual_blob_name}': {e}", exc_info=True)
+        return False
+# --- END NEW DELETE FUNCTION ---

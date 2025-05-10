@@ -964,6 +964,7 @@ async def reset_assessment_status(
     logger.info(f"Resetting document {document_id} status to ERROR.")
     updated_doc = await crud.update_document_status(
         document_id=document_id,
+        teacher_id=document.teacher_id, # ADDED teacher_id from the fetched document
         status=DocumentStatus.ERROR
         # Note: We don't know the counts here, so don't provide them
     )
@@ -1032,6 +1033,7 @@ async def cancel_assessment_status(
     logger.info(f"Cancelling document {document_id} by setting status to ERROR.")
     updated_doc = await crud.update_document_status(
         document_id=document_id,
+        teacher_id=document.teacher_id, # ADDED teacher_id from the fetched document
         status=DocumentStatus.ERROR
     )
     if not updated_doc:
