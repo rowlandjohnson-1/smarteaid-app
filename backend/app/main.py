@@ -12,7 +12,7 @@ from fastapi import status
 # Import config and database lifecycle functions
 # Adjust path '.' based on where main.py is relative to 'core' and 'db'
 from app.core.config import PROJECT_NAME, API_V1_PREFIX, VERSION
-from app.db.database import connect_to_mongo, close_mongo_connection, check_database_health
+from app.db.database import connect_to_mongo, close_mongo_connection, check_database_health, get_database
 
 # Import all endpoint routers
 # Adjust path '.' based on where main.py is relative to 'api'
@@ -70,13 +70,39 @@ app.add_middleware(
 # --- Event Handlers for DB Connection and Batch Processor ---
 @app.on_event("startup")
 async def startup_event():
-    """Connect to MongoDB and start batch processor on application startup."""
+    """Connect to MongoDB, ensure indexes, and start batch processor on application startup."""
     logger.info("Executing startup event: Connecting to database...")
     connected = await connect_to_mongo()
     if not connected:
         logger.critical("FATAL: Database connection failed on startup. Application might not function correctly.")
     else:
         logger.info("Startup event: Database connection successful.")
+        # Ensure indexes after successful connection
+        try:
+            db_instance = get_database()
+            if db_instance:
+                logger.info("Ensuring database indexes...")
+                # Index for teachers.kinde_id
+                # Use the collection name string directly as defined in crud.py or your DB
+                teachers_collection_name = "teachers" 
+                teachers_collection = db_instance.get_collection(teachers_collection_name)
+                
+                # Create index on kinde_id, make it unique
+                # Naming the index is good practice for manageability
+                await teachers_collection.create_index("kinde_id", name="idx_teacher_kinde_id", unique=True)
+                logger.info(f"Index 'idx_teacher_kinde_id' on {teachers_collection_name}.kinde_id ensured (unique).")
+                
+                # Example for other potential indexes (uncomment and adapt as needed):
+                # documents_collection_name = "documents"
+                # documents_collection = db_instance.get_collection(documents_collection_name)
+                # await documents_collection.create_index([("teacher_id", 1), ("student_id", 1)], name="idx_doc_teacher_student")
+                # logger.info(f"Compound index 'idx_doc_teacher_student' on {documents_collection_name} ensured.")
+                
+                logger.info("Database indexes ensured.")
+            else:
+                logger.error("Could not get database instance to ensure indexes.")
+        except Exception as e:
+            logger.error(f"Error ensuring database indexes: {e}", exc_info=True)
 
     # Start batch processor in background task
     asyncio.create_task(batch_processor.process_batches())

@@ -1540,22 +1540,98 @@ async def bulk_delete_schools(school_ids: List[uuid.UUID], hard_delete: bool = F
 class FilterOperator:
     EQUALS = "$eq"; NOT_EQUALS = "$ne"; GREATER_THAN = "$gt"; LESS_THAN = "$lt"
     GREATER_THAN_EQUALS = "$gte"; LESS_THAN_EQUALS = "$lte"; IN = "$in"; NOT_IN = "$nin"
-    EXISTS = "$exists"; REGEX = "$regex"; TEXT = "$text"
+    EXISTS = "$exists"; REGEX = "$regex"; TEXT = "$text"; SEARCH = "$search" # Added $search for $text
+    # Common operators used with $regex
+    OPTIONS = "$options"
+    # Geospatial operators (add if needed, for now an example)
+    # NEAR = "$near"; GEO_WITHIN = "$geoWithin"
+    # Array operators
+    ALL = "$all"; ELEM_MATCH = "$elemMatch"; SIZE = "$size"
+
+# Whitelist of allowed $-prefixed operators
+ALLOWED_MONGO_OPERATORS = {
+    FilterOperator.EQUALS, FilterOperator.NOT_EQUALS, FilterOperator.GREATER_THAN, 
+    FilterOperator.LESS_THAN, FilterOperator.GREATER_THAN_EQUALS, FilterOperator.LESS_THAN_EQUALS,
+    FilterOperator.IN, FilterOperator.NOT_IN, FilterOperator.EXISTS, FilterOperator.REGEX,
+    FilterOperator.TEXT, FilterOperator.SEARCH, FilterOperator.OPTIONS,
+    FilterOperator.ALL, FilterOperator.ELEM_MATCH, FilterOperator.SIZE,
+    # Add any other specific, safe operators you intend to use.
+    # Logical operators that combine expressions (their values will be recursively checked)
+    "$and", "$or", "$not", "$nor"
+}
+
+def _validate_and_sanitize_filter_part(filter_part: Any) -> Any:
+    """Recursively validates and sanitizes a part of the filter query."""
+    if isinstance(filter_part, dict):
+        sanitized_dict = {}
+        for key, value in filter_part.items():
+            if isinstance(key, str) and key.startswith('$'):
+                if key not in ALLOWED_MONGO_OPERATORS:
+                    logger.warning(f"Disallowed MongoDB operator '{key}' found in filter. Ignoring this part: {key}: {value}")
+                    # Option 1: Skip this invalid operator
+                    continue 
+                    # Option 2: Raise an error
+                    # raise ValueError(f"Disallowed MongoDB operator '{key}' found in filter.")
+                # If the operator is allowed, sanitize its value recursively
+                sanitized_dict[key] = _validate_and_sanitize_filter_part(value)
+            else:
+                # Regular field name, sanitize its value recursively
+                sanitized_dict[key] = _validate_and_sanitize_filter_part(value)
+        return sanitized_dict
+    elif isinstance(filter_part, list):
+        # For lists (e.g., in $and, $or, $in clauses), sanitize each item
+        return [_validate_and_sanitize_filter_part(item) for item in filter_part]
+    else:
+        # Primitive value, return as is
+        return filter_part
+
 def build_filter_query(filters: Dict[str, Any], include_deleted: bool = False) -> Dict[str, Any]:
+    """
+    Builds a MongoDB filter query from a dictionary of filters, ensuring only whitelisted
+    $-prefixed operators are used.
+    Applies soft delete filtering unless include_deleted is True.
+    """
     query = {}
-    for field, value in filters.items():
-        if isinstance(value, dict):
-            op_filter = {}; mongo_op = None
-            for op, op_value in value.items():
-                mongo_op = op if op.startswith("$") else getattr(FilterOperator, op.upper(), None)
-                if mongo_op: op_filter[mongo_op] = op_value
-                else: logger.warning(f"Unknown filter operator '{op}' for field '{field}'. Skipping.")
-            if op_filter: query[field] = op_filter
-        else: query[field] = value
-    query.update(soft_delete_filter(include_deleted))
+    if filters:
+        # Validate and sanitize the user-provided filters first
+        sanitized_filters = _validate_and_sanitize_filter_part(filters.copy()) # Work on a copy
+        query.update(sanitized_filters)
+    
+    # Apply soft delete filter - this is trusted internal logic, no need to sanitize its structure here
+    # as it's constructed with known safe operators ($ne).
+    soft_delete_part = soft_delete_filter(include_deleted)
+    
+    # Merge the sanitized filters with the soft delete part.
+    # If there are overlapping keys (e.g., user tries to filter on 'is_deleted'),
+    # the soft_delete_part should ideally take precedence for safety unless explicitly handled.
+    # A simple update might be okay if client-side 'is_deleted' filters are not expected
+    # or are also sanitized through _validate_and_sanitize_filter_part.
+    
+    # If sanitized_filters already contains 'is_deleted', we need to decide strategy.
+    # For now, let's assume soft_delete_filter is paramount for non-deleted items.
+    if not include_deleted:
+        # Ensure our soft delete logic is applied correctly, possibly overriding user input for is_deleted
+        if 'is_deleted' in query and query['is_deleted'] != soft_delete_part['is_deleted']:
+            logger.warning(
+                f"User filter for \'is_deleted\': {query['is_deleted']} conflicts with soft delete logic. "
+                f"Prioritizing soft delete: {soft_delete_part['is_deleted']}"
+            )
+        query.update(soft_delete_part) # This will enforce is_deleted: {"$ne": True}
+    elif 'is_deleted' not in query and include_deleted: # if explicitly asking for all and no filter on is_deleted
+        pass # No specific is_deleted filter, so all documents (deleted or not) are implicitly included by query
+
+    logger.debug(f"Constructed filter query: {query}")
     return query
 
-# --- Relationship Validation (Keep existing) ---
+# Example Usage (for testing):
+# safe_filters = {"name": "test", "age": {"$gt": 20, "$lt": {"$numberInt": "30"} }, "tags": {"$in": ["A", "B"]}, "status": {"$exists": True}}
+# unsafe_filters = {"name": {"$where": "this.credits == this.debits"}, "age": {"$gt": 20} }
+# print(build_filter_query(safe_filters))
+# try:
+#     print(build_filter_query(unsafe_filters))
+# except ValueError as e:
+#     print(e)
+
 async def validate_school_teacher_relationship( school_id: uuid.UUID, teacher_id: uuid.UUID, session=None) -> bool:
     teacher = await get_teacher_by_kinde_id(kinde_id=str(teacher_id), include_deleted=False, session=session) # Assuming teacher_id is Kinde ID string
     # Adjust based on how teacher ID is stored/passed

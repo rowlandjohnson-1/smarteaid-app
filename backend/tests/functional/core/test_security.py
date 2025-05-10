@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from jose import jwt
 from jose.utils import base64url_encode
 import json
+import httpx # Add httpx import for mocking its client
 
 from app.core.security import (
     get_jwks,
@@ -52,64 +53,91 @@ MOCK_PAYLOAD = {
 async def test_get_jwks_success():
     """Test successful JWKS fetching and caching."""
     clear_jwks_cache()
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.json.return_value = MOCK_JWKS
-        mock_get.return_value.raise_for_status.return_value = None
+    # Mock httpx.AsyncClient().get() which is now used by get_jwks
+    with patch('app.core.security.httpx.AsyncClient') as mock_async_client_constructor:
+        mock_async_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_JWKS
+        mock_response.raise_for_status.return_value = None
+        mock_async_client.get.return_value = mock_response # This should be awaited by the caller
         
+        # Configure the context manager to return the mock_async_client
+        mock_instance = MagicMock()
+        mock_instance.__aenter__.return_value = mock_async_client
+        mock_async_client_constructor.return_value = mock_instance
+
         # First call should fetch from network
-        result = get_jwks()
+        result = await get_jwks() # Await the call
         assert result == MOCK_JWKS
-        mock_get.assert_called_once()
+        mock_async_client.get.assert_called_once()
         
         # Second call should use cache
-        result = get_jwks()
+        result = await get_jwks() # Await the call
         assert result == MOCK_JWKS
-        assert mock_get.call_count == 1  # Still only called once
+        # The mock_async_client.get should still only be called once due to lru_cache
+        mock_async_client.get.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_get_jwks_failure():
     """Test JWKS fetching failure handling."""
     clear_jwks_cache()
-    with patch('requests.get') as mock_get:
-        mock_get.side_effect = Exception("Network error")
+    with patch('app.core.security.httpx.AsyncClient') as mock_async_client_constructor:
+        mock_async_client = MagicMock()
+        # Make the get call raise an httpx.RequestError (or similar)
+        mock_async_client.get.side_effect = httpx.RequestError("Network error", request=None) # type: ignore
+
+        mock_instance = MagicMock()
+        mock_instance.__aenter__.return_value = mock_async_client
+        mock_async_client_constructor.return_value = mock_instance
         
         with pytest.raises(JWKSFetchError):
-            get_jwks()
+            await get_jwks() # Await the call
 
 @pytest.mark.asyncio
 async def test_get_jwks_rate_limiting():
     """Test JWKS fetching rate limiting (currently expecting JWKSFetchError on retry without specific rate limit logic)."""
     clear_jwks_cache()
-    with patch('requests.get') as mock_get:
-        mock_get.side_effect = Exception("Network error")
+    with patch('app.core.security.httpx.AsyncClient') as mock_async_client_constructor:
+        mock_async_client = MagicMock()
+        mock_async_client.get.side_effect = httpx.RequestError("Network error", request=None) # type: ignore
+
+        mock_instance = MagicMock()
+        mock_instance.__aenter__.return_value = mock_async_client
+        mock_async_client_constructor.return_value = mock_instance
         
         # First failure
         with pytest.raises(JWKSFetchError):
-            get_jwks()
+            await get_jwks() # Await the call
         
-        # Immediate retry should also result in JWKSFetchError as no specific RateLimitError is implemented in get_jwks
-        # If RateLimitError is implemented in get_jwks, this test should be updated.
-        mock_get.reset_mock()
-        mock_get.side_effect = Exception("Network error on retry")
-        with pytest.raises(JWKSFetchError):
-            get_jwks()
+        # Reset the side effect for the next call if needed, or use a list of side_effects
+        mock_async_client.get.side_effect = httpx.RequestError("Network error on retry", request=None) # type: ignore
+        with pytest.raises(JWKSFetchError): 
+            await get_jwks() # Await the call
 
 # --- Token Validation Tests ---
 @pytest.mark.asyncio
 async def test_validate_token_success():
     """Test successful token validation."""
     clear_jwks_cache()
+    # get_jwks is now async and will be called by validate_token
+    # We need to ensure that if get_jwks is called, it returns MOCK_JWKS
+    # So, we patch get_jwks itself here as it's a dependency of validate_token.
+    # Alternatively, we could patch httpx.AsyncClient like above if we want to test get_jwks through validate_token.
+    # For simplicity and focused testing of validate_token logic, patching get_jwks directly is often easier.
     with patch('app.core.security.get_jwks') as mock_get_jwks:
-        mock_get_jwks.return_value = MOCK_JWKS
-        
-        # Mock JWT decode
+        # Make the mock_get_jwks an async mock that returns MOCK_JWKS
+        async def async_mock_get_jwks():
+            return MOCK_JWKS
+        mock_get_jwks.side_effect = async_mock_get_jwks # Use side_effect for async function mock
+
         with patch('jose.jwt.decode') as mock_decode:
             with patch('app.core.security.KINDE_DOMAIN', "test_issuer"), \
                  patch('app.core.security.KINDE_AUDIENCE', "test_audience"):
                 mock_decode.return_value = MOCK_PAYLOAD
                 
-                result = validate_token(MOCK_TOKEN)
+                result = await validate_token(MOCK_TOKEN) # Await the call
                 assert result == MOCK_PAYLOAD
+                mock_get_jwks.assert_called_once() # Ensure get_jwks was called
                 mock_decode.assert_called_once_with(
                     MOCK_TOKEN,
                     MOCK_JWKS['keys'][0],
@@ -123,58 +151,75 @@ async def test_validate_token_expired():
     """Test expired token validation."""
     clear_jwks_cache()
     with patch('app.core.security.get_jwks') as mock_get_jwks:
-        mock_get_jwks.return_value = MOCK_JWKS
+        async def async_mock_get_jwks(): return MOCK_JWKS
+        mock_get_jwks.side_effect = async_mock_get_jwks
         
         with patch('app.core.security.KINDE_DOMAIN', "test_issuer"), \
              patch('app.core.security.KINDE_AUDIENCE', "test_audience"):
             with patch('jose.jwt.decode', side_effect=jwt.ExpiredSignatureError("Token has expired")) as mock_decode:
                 with pytest.raises(TokenValidationError, match="Expired signature"):
-                    validate_token(MOCK_TOKEN)
+                    await validate_token(MOCK_TOKEN) # Await the call
 
 @pytest.mark.asyncio
 async def test_validate_token_invalid_kid():
     """Test token validation with invalid key ID."""
     clear_jwks_cache()
     with patch('app.core.security.get_jwks') as mock_get_jwks:
-        mock_get_jwks.return_value = {"keys": []}  # No matching key
+        async def async_mock_get_jwks(): return {"keys": []} # No matching key
+        mock_get_jwks.side_effect = async_mock_get_jwks
+        
         with patch('app.core.security.KINDE_DOMAIN', "test_issuer"), \
              patch('app.core.security.KINDE_AUDIENCE', "test_audience"):
             with pytest.raises(TokenValidationError, match="Public key with kid 'test_key_1' not found"):
-                validate_token(MOCK_TOKEN)
+                await validate_token(MOCK_TOKEN) # Await the call
 
 # --- Cache Management Tests ---
 @pytest.mark.asyncio
 async def test_clear_jwks_cache():
     """Test JWKS cache clearing."""
-    clear_jwks_cache()
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.json.return_value = MOCK_JWKS
-        mock_get.return_value.raise_for_status.return_value = None
+    clear_jwks_cache() 
+    with patch('app.core.security.httpx.AsyncClient') as mock_async_client_constructor:
+        mock_async_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_JWKS
+        mock_response.raise_for_status.return_value = None
+        mock_async_client.get.return_value = mock_response
+
+        mock_instance = MagicMock()
+        mock_instance.__aenter__.return_value = mock_async_client
+        mock_async_client_constructor.return_value = mock_instance
         
         # First call populates cache
-        get_jwks()
-        assert mock_get.call_count == 1, "requests.get should be called once to populate cache"
+        await get_jwks() # Await
+        assert mock_async_client.get.call_count == 1, "httpx.AsyncClient.get should be called once to populate cache"
         
         # Clear cache
         clear_jwks_cache()
         
         # Next call should fetch again
-        get_jwks()
-        assert mock_get.call_count == 2, "requests.get should be called again after cache clear"
+        await get_jwks() # Await
+        assert mock_async_client.get.call_count == 2, "httpx.AsyncClient.get should be called again after cache clear"
 
 @pytest.mark.asyncio
 async def test_get_jwks_cache_info():
     """Test JWKS cache info retrieval."""
     clear_jwks_cache()
-    with patch('requests.get') as mock_get:
-        mock_get.return_value.json.return_value = MOCK_JWKS
-        mock_get.return_value.raise_for_status.return_value = None
+    with patch('app.core.security.httpx.AsyncClient') as mock_async_client_constructor:
+        mock_async_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = MOCK_JWKS
+        mock_response.raise_for_status.return_value = None
+        mock_async_client.get.return_value = mock_response
+
+        mock_instance = MagicMock()
+        mock_instance.__aenter__.return_value = mock_async_client
+        mock_async_client_constructor.return_value = mock_instance
         
         # Populate cache
-        get_jwks()
-        get_jwks()
+        await get_jwks() # Await
+        await get_jwks() # Await
         
-        # Get cache info
+        # Get cache info (this function itself is not async)
         cache_info = get_jwks_cache_info()
         assert isinstance(cache_info, dict)
         assert "hits" in cache_info

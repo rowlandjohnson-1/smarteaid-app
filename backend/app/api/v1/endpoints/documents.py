@@ -13,6 +13,7 @@ from fastapi.responses import PlainTextResponse, JSONResponse # Added JSONRespon
 from datetime import datetime, timezone
 import httpx # Import httpx for making external API calls
 import re # Import re for word count calculation
+import asyncio # Added for asyncio.to_thread
 
 # Import models
 from app.models.document import Document, DocumentCreate, DocumentUpdate
@@ -250,27 +251,31 @@ async def trigger_assessment(
         elif isinstance(document.file_type, FileType):
             file_type_enum_member = document.file_type
 
-        if file_type_enum_member is None:
-            raise ValueError(f"Could not map file type '{document.file_type}' to enum.")
+        if not file_type_enum_member:
+            logger.error(f"Could not map document.file_type '{document.file_type}' to FileType enum for doc {document_id}")
+            raise HTTPException(status_code=500, detail="Internal error: Could not determine file type for text extraction.")
 
-        # Check if type is supported for text extraction
-        if file_type_enum_member not in [FileType.PDF, FileType.DOCX, FileType.TXT, FileType.TEXT]:
-             raise ValueError(f"Text extraction not supported for file type: {document.file_type}")
-
-        # Download bytes
-        file_bytes = await download_blob_as_bytes(blob_name=document.storage_blob_path)
+        # Download blob as bytes
+        file_bytes = await download_blob_as_bytes(document.storage_blob_path)
         if file_bytes is None:
-            raise ValueError(f"Failed to download blob '{document.storage_blob_path}'")
+            logger.error(f"Failed to download blob {document.storage_blob_path} for document {document_id}")
+            # Update status to error and raise
+            await crud.update_document_status(document_id=document_id, teacher_id=auth_teacher_id, status=DocumentStatus.ERROR)
+            if result: # Check if result exists before trying to update it
+                await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id)
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to retrieve document content from storage for assessment.")
 
-        # Extract text
-        extracted_text = extract_text_from_bytes(file_bytes=file_bytes, file_type=file_type_enum_member)
+        # Call the synchronous extract_text_from_bytes in a separate thread
+        logger.info(f"Offloading text extraction for document {document_id} to a separate thread.")
+        extracted_text = await asyncio.to_thread(extract_text_from_bytes, file_bytes, file_type_enum_member)
+        logger.info(f"Text extraction completed for document {document_id}. Chars: {len(extracted_text) if extracted_text else 0}")
+
         if extracted_text is None:
-             # Handle case where extraction returns None for valid but empty/unextractable files
-             logger.warning(f"Text extraction returned None for document {document_id}. Treating as empty text.")
-             extracted_text = "" # Set to empty string to proceed
-
-        logger.info(f"Successfully extracted text ({len(extracted_text)} chars) for document {document_id}")
-
+            # This implies an error during extraction or unsupported type by the extraction func itself
+            logger.warning(f"Text extraction returned None for document {document.id} ({document.file_type}).")
+            # Return empty string if extraction fails, or raise specific error if preferred
+            return "" # Or raise HTTPException(500, "Text extraction failed.")
+        
         # Calculate character count
         character_count = len(extracted_text)
         # Calculate word count (split by whitespace, filter empty)
@@ -529,77 +534,59 @@ async def get_document_text(
     Protected endpoint to retrieve the extracted plain text for a specific document.
     """
     user_kinde_id = current_user_payload.get("sub")
-    logger.info(f"User {user_kinde_id} requesting extracted text for document ID: {document_id}")
+    logger.info(f"User {user_kinde_id} attempting to retrieve text for document ID: {document_id}")
 
-    # --- Authorization & Document Fetch ---
-    # 1. Fetch the document and implicitly check ownership
+    # --- Get Document & Authorization Check ---
     document = await crud.get_document_by_id(
         document_id=document_id,
-        teacher_id=user_kinde_id # Filter by current user's ID
+        teacher_id=user_kinde_id # Ensures document belongs to the user
     )
-    if not document:
-        # Raise 404 if document doesn't exist OR doesn't belong to the user
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document with ID {document_id} not found or access denied."
-        )
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found or not accessible by user.")
 
-    # 2. TODO: Authorization Check
-    logger.warning(f"Authorization check needed for user {user_kinde_id} accessing text of document {document_id}")
-
-    # Convert file_type string (from DB/model) back to Enum member if possible
-    file_type_str = document.file_type
+    # Convert file_type string from DB (if it's a string) to FileType enum member
     file_type_enum_member: Optional[FileType] = None
-    if isinstance(file_type_str, str):
+    if isinstance(document.file_type, str):
         for member in FileType:
-            if member.value.lower() == file_type_str.lower():
+            if member.value.lower() == document.file_type.lower():
                 file_type_enum_member = member
                 break
-    elif isinstance(file_type_str, FileType): # If it somehow already is an Enum
-        file_type_enum_member = file_type_str
+    elif isinstance(document.file_type, FileType):
+        file_type_enum_member = document.file_type # It's already an enum
 
-    # 3. Check if file type is supported for text extraction (using the Enum member)
+    if not file_type_enum_member:
+        logger.error(f"Could not map document.file_type '{document.file_type}' to FileType enum for doc {document_id} in get_document_text")
+        raise HTTPException(status_code=500, detail="Internal error: Could not determine file type for text extraction.")
+
+    # Check if text extraction is supported for this file type
     if file_type_enum_member not in [FileType.PDF, FileType.DOCX, FileType.TXT, FileType.TEXT]:
-        logger.warning(f"Text extraction requested for unsupported file type '{file_type_str}' for document {document_id}")
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"Text extraction not supported for file type: {file_type_str}"
+            detail=f"Text extraction not supported for file type: {document.file_type}. Supported types for text extraction: PDF, DOCX, TXT."
         )
 
-    # Ensure we have a valid enum member before proceeding
-    if file_type_enum_member is None:
-        logger.error(f"Could not map file_type string '{file_type_str}' back to FileType enum for doc {document_id}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error processing file type.")
-
-    # 4. Download file bytes from blob storage
-    blob_name = document.storage_blob_path
-    file_bytes: Optional[bytes] = None
+    # --- Download and Extract Text ---
     try:
-        logger.debug(f"Attempting to download blob: {blob_name}")
-        file_bytes = await download_blob_as_bytes(blob_name=blob_name)
+        file_bytes = await download_blob_as_bytes(document.storage_blob_path)
         if file_bytes is None:
-            raise ValueError(f"Blob '{blob_name}' not found or download returned None.")
-        logger.debug(f"Successfully downloaded {len(file_bytes)} bytes for blob: {blob_name}")
+            logger.error(f"Failed to download blob {document.storage_blob_path} for document {document_id} text retrieval")
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Error downloading file content.")
+        
+        # Call the synchronous extract_text_from_bytes in a separate thread
+        logger.info(f"Offloading text extraction for document {document_id} (get_document_text) to a separate thread.")
+        extracted_text = await asyncio.to_thread(extract_text_from_bytes, file_bytes, file_type_enum_member)
+        logger.info(f"Text extraction completed for document {document_id} (get_document_text). Chars: {len(extracted_text) if extracted_text else 0}")
+
+        if extracted_text is None:
+            # This implies an error during extraction or unsupported type by the extraction func itself
+            logger.warning(f"Text extraction returned None for document {document.id} ({document.file_type}).")
+            # Return empty string if extraction fails, or raise specific error if preferred
+            return "" # Or raise HTTPException(500, "Text extraction failed.")
+        
+        return extracted_text
     except Exception as e:
-        logger.error(f"Failed to download blob '{blob_name}' for document {document_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve document content from storage.")
-
-    # 5. Extract text using the helper function
-    if file_bytes is None: # Safety check
-        logger.error(f"File bytes are None after download for blob {blob_name}, cannot extract text.")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal error retrieving file content.")
-
-    logger.debug(f"Attempting text extraction for document {document_id} (type: {file_type_str})") # Log string
-    extracted_text = extract_text_from_bytes(file_bytes=file_bytes, file_type=file_type_enum_member) # Pass Enum
-
-    # 6. Handle extraction result and return response
-    if extracted_text is None:
-        logger.error(f"Text extraction function returned None for document {document_id} (type: {file_type_str})")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to extract text content from the document.")
-    else:
-        logger.info(f"Successfully extracted and returning text for document {document_id} ({len(extracted_text)} chars)")
-        # Return empty string if extraction yielded nothing, otherwise the text
-        return str(extracted_text) if extracted_text is not None else ""
+        logger.error(f"Error during text retrieval for document {document.id}: {e}", exc_info=True)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "An unexpected error occurred during text retrieval.")
 
 @router.get(
     "/",
