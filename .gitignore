@@ -10,6 +10,7 @@ env/
 # Environment variables - IMPORTANT
 *.env
 .env.*
+.env.test
 
 # IDE / OS specific files
 .vscode/

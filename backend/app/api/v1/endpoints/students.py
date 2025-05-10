@@ -165,7 +165,11 @@ async def update_existing_student(
         )
 
     # Try to update (we know the user owns the student at this point)
-    updated_student = await crud.update_student(student_internal_id=student_internal_id, student_in=student_in)
+    updated_student = await crud.update_student(
+        student_internal_id=student_internal_id, 
+        teacher_id=user_kinde_id,  # <<< ADDED teacher_id HERE
+        student_in=student_in
+    )
     if updated_student is None:
         # If update failed after existence/ownership check, likely a duplicate external_student_id
         if student_in.external_student_id:

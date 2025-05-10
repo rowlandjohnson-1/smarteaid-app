@@ -3,7 +3,8 @@
 import uuid # Corrected Indentation
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, status, Query, Depends
+from fastapi import APIRouter, HTTPException, status, Query, Depends # Removed , Request
+from pydantic import ValidationError # Added ValidationError
 
 # Import Pydantic models for ClassGroup
 from app.models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
@@ -112,12 +113,14 @@ async def _check_user_is_teacher_of_group( # Needs async to call crud.get_teache
     description="Creates a new class group record. Requires authentication. The teacher ID is taken from the authenticated user."
 )
 async def create_new_class_group(
-    class_group_in: ClassGroupCreate, # Now doesn't expect teacher_id in body
+    class_group_in: ClassGroupCreate, # Removed request: Request
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     """Creates a new class group, assigning the authenticated user as the teacher."""
+    # Removed the "EXTREME DEBUGGING" block
+    logger.info(f"Attempting to create new class group. User payload: {current_user_payload.get('sub')}") # This is the first log line
+
     user_kinde_id_str = current_user_payload.get("sub")
-    logger.info(f"User {user_kinde_id_str} attempting to create class group: {class_group_in.class_name}")
 
     # --- Get Teacher's Internal UUID ---
     teacher_internal_id: Optional[uuid.UUID] = None
@@ -144,18 +147,49 @@ async def create_new_class_group(
 
     # TODO: Add further checks? Does the specified school_id exist?
 
-    created_cg = await crud.create_class_group(
-        class_group_in=class_group_in,
-        teacher_id=teacher_internal_id # Pass the internal ID
-    )
+    try:
+        logger.info(f"User {user_kinde_id_str} attempting to create class group with data from Pydantic model: {class_group_in.model_dump()}")
 
-    if not created_cg:
+        created_cg = await crud.create_class_group(
+            class_group_in=class_group_in,
+            teacher_id=teacher_internal_id # Pass the internal ID
+        )
+
+        if not created_cg:
+            logger.error(f"CRUD create_class_group returned None for user {user_kinde_id_str} with data {class_group_in.model_dump()}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Could not create the class group record (CRUD function returned None)."
+            )
+        logger.info(f"ClassGroup '{created_cg.class_name}' (ID: {created_cg.id}) created successfully by user {user_kinde_id_str} (Teacher ID: {teacher_internal_id}).")
+        return created_cg
+    except ValidationError as e:
+        logger.error(f"Pydantic ValidationError manually caught in create_new_class_group for user {user_kinde_id_str}. Errors: {e.errors()}", exc_info=True)
+        error_details = []
+        for error in e.errors():
+            field = " -> ".join(str(loc) for loc in error.get("loc", []))
+            message = error.get("msg", "Unknown validation error")
+            error_type = error.get("type", "Unknown type")
+            error_details.append({"field": field, "message": message, "type": error_type})
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "Validation Error caught in endpoint", "errors": error_details}
+        )
+    except HTTPException as http_exc:
+        logger.warning(f"HTTPException caught in create_new_class_group for user {user_kinde_id_str}: {http_exc.detail}", exc_info=True)
+        raise http_exc
+    except Exception as e:
+        # Log the incoming data if possible, but be cautious with sensitive info
+        logged_data = "Error accessing class_group_in for logging"
+        try:
+            logged_data = class_group_in.model_dump(exclude_none=True)
+        except Exception:
+            pass # Keep default error string
+        logger.error(f"Unexpected error creating class group for user {user_kinde_id_str} with data {logged_data}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not create the class group record."
+            detail=f"An unexpected error occurred: {str(e)}"
         )
-    logger.info(f"ClassGroup '{created_cg.class_name}' (ID: {created_cg.id}) created successfully by user {user_kinde_id_str} (Teacher ID: {teacher_internal_id}).")
-    return created_cg
 
 # --- GET /classgroups/{class_group_id} ---
 @router.get(

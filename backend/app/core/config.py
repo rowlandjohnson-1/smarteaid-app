@@ -3,7 +3,8 @@ import os
 import logging
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+from pydantic_settings import BaseSettings
 
 # --- Path Setup & .env Loading ---
 # Assume .env is in the backend project root, two levels up from core
@@ -14,75 +15,116 @@ ENV_PATH = BASE_DIR / '.env'
 if ENV_PATH.is_file():
     load_dotenv(dotenv_path=ENV_PATH)
 else:
+    # Use print for early config warnings as logger might not be set up yet
     print(f"Warning: .env file not found at {ENV_PATH}. Relying on system environment variables.")
 
+# --- Pydantic Settings Class ---
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "AI Detector API"
+    DEBUG: bool = False
+    VERSION: str = "0.1.0"
+    API_V1_PREFIX: str = "/api/v1"
+
+    # Database Settings
+    MONGODB_URL: Optional[str] = None
+    DB_NAME: str = "aidetector_dev"
+
+    # Kinde Backend Settings
+    KINDE_DOMAIN: Optional[str] = None
+    KINDE_AUDIENCE: Optional[str] = None # This can be a single string
+    # If KINDE_AUDIENCE can be multiple, use: KINDE_AUDIENCE: Optional[List[str]] = None
+
+    # Azure Blob Storage Settings
+    AZURE_BLOB_CONNECTION_STRING: Optional[str] = None
+    AZURE_BLOB_CONTAINER_NAME: str = "uploaded-documents"
+
+    # Stripe Settings (Placeholders)
+    STRIPE_SECRET_KEY: Optional[str] = None
+    STRIPE_WEBHOOK_SECRET: Optional[str] = None
+
+    # Add other environment variables as needed
+    # e.g., ML_API_URL: Optional[str] = None
+    # e.g., ML_API_KEY: Optional[str] = None
+
+    # Pydantic-settings can automatically load from .env if configured here
+    # class Config:
+    #     env_file = ENV_PATH # Use the path determined above
+    #     env_file_encoding = "utf-8"
+    #     extra = 'ignore' # Ignore extra fields in .env not defined in Settings
+
+# Create an instance of the Settings class
+settings = Settings()
+
 # --- Logging Setup ---
-# Set logging level to INFO by default, only use DEBUG if explicitly enabled
-LOG_LEVEL = logging.DEBUG if os.getenv("DEBUG", "False").lower() == "true" else logging.WARNING
+# Set logging level based on settings.DEBUG
+LOG_LEVEL_NAME: str = os.getenv("LOG_LEVEL", "WARNING").upper()
+if settings.DEBUG:
+    LOG_LEVEL_NAME = "DEBUG"
+
+# Convert log level name to actual level
+ACTUAL_LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
+
 logging.basicConfig(
-    level=LOG_LEVEL,
-    format='%(levelname)s: %(message)s'  # Simplified format
+    level=ACTUAL_LOG_LEVEL,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' # More detailed format
 )
 
-# Configure specific loggers
+# Configure specific loggers (can be more granular if needed)
 logging.getLogger('uvicorn').setLevel(logging.WARNING)
 logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
-logging.getLogger('fastapi').setLevel(logging.WARNING)
+logging.getLogger('fastapi').setLevel(logging.INFO if settings.DEBUG else logging.WARNING)
 logging.getLogger('motor').setLevel(logging.WARNING)
 logging.getLogger('azure').setLevel(logging.WARNING)
 logging.getLogger('pymongo').setLevel(logging.WARNING)
 
-# Get logger for this module
+# Get logger for this module (config.py)
 logger = logging.getLogger(__name__)
 
-# --- Core Settings ---
-PROJECT_NAME: str = os.getenv("PROJECT_NAME", "AI Detector API")
-DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
-VERSION: str = os.getenv("APP_VERSION", "0.1.0")
-API_V1_PREFIX: str = "/api/v1"
+# --- Validate critical settings after loading ---
+if not settings.MONGODB_URL:
+    logger.critical("CRITICAL: MONGODB_URL environment variable is not set and no default provided.")
+# No need to check DB_NAME as it has a default
 
-# --- Database Settings ---
-MONGODB_URL: Optional[str] = os.getenv("MONGO_CONNECTION_STRING") or os.getenv("MONGODB_URL")
-DB_NAME: str = os.getenv("MONGO_DATABASE_NAME") or os.getenv("DB_NAME", "aidetector_dev")
+if not settings.KINDE_DOMAIN:
+    logger.warning("KINDE_DOMAIN environment variable is not set. Authentication will likely fail.")
+if not settings.KINDE_AUDIENCE:
+    logger.warning("KINDE_AUDIENCE environment variable is not set. Token validation might fail.")
 
-if not MONGODB_URL:
-    logger.warning("MONGODB_URL environment variable is not set.")
-if not DB_NAME:
-    logger.warning("DB_NAME environment variable is not set.")
-
-# --- Kinde Backend Settings ---
-# Used for backend API token validation by security.py
-KINDE_DOMAIN: Optional[str] = os.getenv("KINDE_DOMAIN")
-KINDE_AUDIENCE: Optional[str] = os.getenv("KINDE_AUDIENCE")
-
-if not KINDE_DOMAIN: logger.warning("KINDE_DOMAIN environment variable is not set.")
-if not KINDE_AUDIENCE: logger.warning("KINDE_AUDIENCE environment variable is not set.")
-
-# --- Azure Blob Storage Settings ---
-# Used by services/blob_storage.py
-AZURE_BLOB_CONNECTION_STRING: Optional[str] = os.getenv("AZURE_BLOB_CONNECTION_STRING")
-AZURE_BLOB_CONTAINER_NAME: str = os.getenv("AZURE_BLOB_CONTAINER_NAME", "uploaded-documents") # Default if not set in .env
-
-# Validate required Blob settings
-if not AZURE_BLOB_CONNECTION_STRING:
-    logger.warning("AZURE_BLOB_CONNECTION_STRING environment variable is not set.")
-if not AZURE_BLOB_CONTAINER_NAME:
-    logger.warning("AZURE_BLOB_CONTAINER_NAME environment variable is not set.")
-
-# --- Stripe Settings (Placeholders) ---
-STRIPE_SECRET_KEY: Optional[str] = os.getenv("STRIPE_SECRET_KEY")
-STRIPE_WEBHOOK_SECRET: Optional[str] = os.getenv("STRIPE_WEBHOOK_SECRET")
-
-# --- Add other environment variables below ---
-# e.g., ML_API_URL, ML_API_KEY
+if not settings.AZURE_BLOB_CONNECTION_STRING:
+    logger.warning("AZURE_BLOB_CONNECTION_STRING environment variable is not set. File uploads will fail.")
+# No need to check AZURE_BLOB_CONTAINER_NAME as it has a default
 
 # --- Log loaded settings (optional, careful with secrets in real logs) ---
-# logger.debug(f"PROJECT_NAME: {PROJECT_NAME}")
-# logger.debug(f"DEBUG: {DEBUG}")
-# logger.debug(f"DB_NAME: {DB_NAME}")
-# logger.debug(f"KINDE_DOMAIN: {KINDE_DOMAIN}")
-# logger.debug(f"KINDE_AUDIENCE: {KINDE_AUDIENCE}")
-# logger.debug(f"AZURE_BLOB_CONTAINER_NAME: {AZURE_BLOB_CONTAINER_NAME}")
-# logger.debug(f"MONGODB_URL Set: {'Yes' if MONGODB_URL else 'No'}")
-# logger.debug(f"AZURE_BLOB_CONNECTION_STRING Set: {'Yes' if AZURE_BLOB_CONNECTION_STRING else 'No'}")
+if settings.DEBUG:
+    logger.debug(f"PROJECT_NAME: {settings.PROJECT_NAME}")
+    logger.debug(f"DEBUG: {settings.DEBUG}")
+    logger.debug(f"API_V1_PREFIX: {settings.API_V1_PREFIX}")
+    logger.debug(f"DB_NAME: {settings.DB_NAME}")
+    logger.debug(f"KINDE_DOMAIN: {settings.KINDE_DOMAIN}")
+    logger.debug(f"KINDE_AUDIENCE: {settings.KINDE_AUDIENCE}")
+    logger.debug(f"AZURE_BLOB_CONTAINER_NAME: {settings.AZURE_BLOB_CONTAINER_NAME}")
+    logger.debug(f"MONGODB_URL Set: {'Yes' if settings.MONGODB_URL else 'No - CRITICAL'}")
+    logger.debug(f"AZURE_BLOB_CONNECTION_STRING Set: {'Yes' if settings.AZURE_BLOB_CONNECTION_STRING else 'No - WARNING'}")
+
+# The individual uppercase constants previously defined (e.g., PROJECT_NAME, DEBUG directly from os.getenv)
+# are now superseded by accessing them via the 'settings' object, e.g., settings.PROJECT_NAME, settings.DEBUG.
+# Your application code should be updated to import and use 'settings.VARIABLE_NAME' 
+# instead of 'VARIABLE_NAME' from this module if it was doing so.
+# However, files like security.py that did `from .config import KINDE_DOMAIN` will continue to work
+# if KINDE_DOMAIN is still present as a module-level variable (which it will be if not removed after settings definition).
+# For consistency, it's better to have other modules import the `settings` object.
+
+# To ensure modules importing specific constants still work during transition, we can alias them (optional):
+PROJECT_NAME = settings.PROJECT_NAME
+DEBUG = settings.DEBUG
+VERSION = settings.VERSION
+API_V1_PREFIX = settings.API_V1_PREFIX
+MONGODB_URL = settings.MONGODB_URL
+DB_NAME = settings.DB_NAME
+KINDE_DOMAIN = settings.KINDE_DOMAIN
+KINDE_AUDIENCE = settings.KINDE_AUDIENCE
+AZURE_BLOB_CONNECTION_STRING = settings.AZURE_BLOB_CONNECTION_STRING
+AZURE_BLOB_CONTAINER_NAME = settings.AZURE_BLOB_CONTAINER_NAME
+STRIPE_SECRET_KEY = settings.STRIPE_SECRET_KEY
+STRIPE_WEBHOOK_SECRET = settings.STRIPE_WEBHOOK_SECRET
 
