@@ -172,10 +172,18 @@ async def trigger_assessment(
     # --- Get Document & Authorization Check ---
     document = await crud.get_document_by_id(
         document_id=document_id,
-        teacher_id=user_kinde_id # <<< ADDED
+        teacher_id=user_kinde_id # <<< This ensures the document belongs to the user
     )
     if document is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document with ID {document_id} not found or not accessible by user.")
+
+    # Ensure document.teacher_id is available, otherwise use user_kinde_id as a fallback.
+    # Given the above fetch, document.teacher_id should match user_kinde_id.
+    auth_teacher_id = document.teacher_id if document.teacher_id else user_kinde_id
+    if not auth_teacher_id:
+        logger.error(f"Critical: teacher_id is missing for document {document_id} during assessment trigger by user {user_kinde_id}.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error: Missing teacher identifier.")
+
 
     # TODO: Implement proper authorization check: Can user trigger assessment for this document?
     logger.warning(f"Authorization check needed for user {user_kinde_id} triggering assessment for document {document_id}")
@@ -184,7 +192,7 @@ async def trigger_assessment(
     if document.status not in [DocumentStatus.UPLOADED, DocumentStatus.ERROR]:
         logger.warning(f"Document {document_id} status is '{document.status}'. Assessment cannot be triggered.")
         # Return the existing result instead of erroring if it's already completed/processing
-        existing_result = await crud.get_result_by_document_id(document_id=document_id)
+        existing_result = await crud.get_result_by_document_id(document_id=document_id, teacher_id=auth_teacher_id) # Pass teacher_id here too
         if existing_result:
             # Return 200 OK with the existing result if already completed or processing
             if existing_result.status in [ResultStatus.COMPLETED, ResultStatus.ASSESSING]:
@@ -201,40 +209,36 @@ async def trigger_assessment(
             )
 
     # --- Update Status to PROCESSING ---
-    await crud.update_document_status(document_id=document_id, status=DocumentStatus.PROCESSING)
-    result = await crud.get_result_by_document_id(document_id=document_id)
+    await crud.update_document_status(document_id=document_id, teacher_id=auth_teacher_id, status=DocumentStatus.PROCESSING)
+    result = await crud.get_result_by_document_id(document_id=document_id, teacher_id=auth_teacher_id) # Pass teacher_id
     if result:
         # --- Pass dictionary directly to crud.update_result ---
-        await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ASSESSING})
+        await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ASSESSING}, teacher_id=auth_teacher_id) # Added teacher_id if update_result supports it
         logger.info(f"Existing result record found for doc {document_id}, updated status to ASSESSING.")
     else:
         # Handle case where result record didn't exist (should have been created on upload)
         logger.warning(f"Result record missing for document {document_id} during assessment trigger. Creating one now.")
-        # Create it now with ASSESSING status.
-        # await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR) # REMOVED: Revert doc status
-        # raise HTTPException(status_code=500, detail="Internal error: Result record missing.") # REMOVED: Raise error
-
-        # <<< ADDED: Create the result record >>>
         result_data = ResultCreate(
             score=None, 
             status=ResultStatus.ASSESSING, # Start with ASSESSING status
             result_timestamp=datetime.now(timezone.utc), 
             document_id=document_id, 
-            teacher_id=user_kinde_id # Use the authenticated user's ID
+            teacher_id=auth_teacher_id # Use the authenticated user's ID
         )
         created_result = await crud.create_result(result_in=result_data)
         if not created_result:
             logger.error(f"Failed to create missing result record for document {document_id}. Assessment cannot proceed.")
             # If creation fails even here, revert doc status and raise error
-            await crud.update_document_status(document_id=document_id, status=DocumentStatus.ERROR)
+            await crud.update_document_status(document_id=document_id, teacher_id=auth_teacher_id, status=DocumentStatus.ERROR)
             raise HTTPException(status_code=500, detail="Internal error: Failed to create necessary result record.")
         else:
             logger.info(f"Successfully created missing result record {created_result.id} for doc {document_id} with status ASSESSING.")
             result = created_result # Use the newly created result for subsequent steps
-        # <<< END ADDED >>>
 
     # --- Text Extraction ---
     extracted_text: Optional[str] = None
+    character_count: Optional[int] = None # Initialize
+    word_count: Optional[int] = None      # Initialize
     try:
         # Convert file_type string back to Enum member if needed
         file_type_enum_member: Optional[FileType] = None
@@ -274,20 +278,42 @@ async def trigger_assessment(
         word_count = len([word for word in words if word]) # Count non-empty strings
         logger.info(f"Calculated counts for document {document_id}: Chars={character_count}, Words={word_count}")
 
-    except Exception as e:
-        logger.error(f"Failed text extraction stage for document {document_id}: {e}", exc_info=True)
-        # Update status to ERROR
+    except FileNotFoundError:
+        logger.error(f"File not found in blob storage for document {document_id} at path {document.storage_blob_path}", exc_info=True)
         await crud.update_document_status(
-            document_id=document_id,
+            document_id=document.id, 
+            teacher_id=auth_teacher_id, 
             status=DocumentStatus.ERROR,
-            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
-            word_count=word_count if 'word_count' in locals() else None
+            # Optionally pass character_count and word_count as None or 0 if known
         )
-        # --- Pass dictionary directly to crud.update_result ---
-        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process document text: {e}")
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id if update_result supports it
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error accessing document file for text extraction.")
+    except ValueError as e: # Catch specific error from text_extraction if it raises one for unsupported types
+        logger.error(f"Text extraction error for document {document.id}: {e}", exc_info=True)
+        await crud.update_document_status(
+            document_id=document.id, 
+            teacher_id=auth_teacher_id, 
+            status=DocumentStatus.ERROR
+        )
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id if update_result supports it
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error during text extraction for document {document_id}: {e}", exc_info=True)
+        await crud.update_document_status(
+            document_id=document.id, 
+            teacher_id=auth_teacher_id, 
+            status=DocumentStatus.ERROR
+        )
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id if update_result supports it
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to extract text from document.")
 
-    # --- Call External ML API ---
+    if extracted_text is None: # Should be caught by specific exceptions above, but as a safeguard
+        logger.error(f"Text extraction resulted in None for document {document_id}")
+        await crud.update_document_status(document_id=document.id, teacher_id=auth_teacher_id, status=DocumentStatus.ERROR)
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id if update_result supports it
+        raise HTTPException(status_code=500, detail="Text content could not be extracted.")
+        
+    # --- ML API Call ---
     ai_score: Optional[float] = None
     ml_label: Optional[str] = None
     ml_ai_generated: Optional[bool] = None
@@ -342,34 +368,34 @@ async def trigger_assessment(
         logger.error(f"HTTP error calling ML API for document {document_id}: {e.response.status_code} - {e.response.text}", exc_info=False)
         await crud.update_document_status(
             document_id=document_id,
+            teacher_id=auth_teacher_id,
             status=DocumentStatus.ERROR,
-            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
-            word_count=word_count if 'word_count' in locals() else None
+            character_count=character_count,
+            word_count=word_count
         )
-        # --- Pass dictionary directly to crud.update_result ---
-        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Error communicating with AI detection service: {e.response.status_code}")
     except ValueError as e:
         logger.error(f"Error processing ML API response for document {document_id}: {e}", exc_info=True)
         await crud.update_document_status(
             document_id=document_id,
+            teacher_id=auth_teacher_id,
             status=DocumentStatus.ERROR,
-            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
-            word_count=word_count if 'word_count' in locals() else None
+            character_count=character_count,
+            word_count=word_count
         )
-        # --- Pass dictionary directly to crud.update_result ---
-        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI detection result: {e}")
     except Exception as e:
         logger.error(f"Unexpected error during ML API call or processing for document {document_id}: {e}", exc_info=True)
         await crud.update_document_status(
             document_id=document_id,
+            teacher_id=auth_teacher_id,
             status=DocumentStatus.ERROR,
-            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
-            word_count=word_count if 'word_count' in locals() else None
+            character_count=character_count,
+            word_count=word_count
         )
-        # --- Pass dictionary directly to crud.update_result ---
-        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to get AI detection result: {e}")
 
 
@@ -397,7 +423,7 @@ async def trigger_assessment(
             # --- Call CRUD update function with the dictionary ---
             # +++ ADDED: Log payload before update +++
             logger.debug(f"Attempting to update Result {result.id} with payload: {update_payload_dict}")
-            final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict)
+            final_result = await crud.update_result(result_id=result.id, update_data=update_payload_dict, teacher_id=auth_teacher_id) # Added teacher_id
 
             if final_result:
                 logger.info(f"Successfully updated result for document {document_id}")
@@ -408,6 +434,7 @@ async def trigger_assessment(
                 )
                 await crud.update_document_status(
                     document_id=document_id,
+                    teacher_id=auth_teacher_id,
                     status=DocumentStatus.COMPLETED,
                     character_count=character_count, # Pass calculated counts
                     word_count=word_count
@@ -417,6 +444,7 @@ async def trigger_assessment(
                 # If result update failed, set document status back to ERROR
                 await crud.update_document_status(
                     document_id=document_id,
+                    teacher_id=auth_teacher_id,
                     status=DocumentStatus.ERROR,
                     character_count=character_count, # Still pass counts even on error
                     word_count=word_count
@@ -429,6 +457,7 @@ async def trigger_assessment(
             # Update document status back to ERROR
             await crud.update_document_status(
                 document_id=document_id,
+                teacher_id=auth_teacher_id,
                 status=DocumentStatus.ERROR,
                 character_count=character_count, # Pass counts
                 word_count=word_count
@@ -439,12 +468,12 @@ async def trigger_assessment(
         logger.error(f"Failed to update database after successful ML API call for document {document_id}: {e}", exc_info=True)
         await crud.update_document_status(
             document_id=document_id,
+            teacher_id=auth_teacher_id,
             status=DocumentStatus.ERROR,
-            character_count=character_count if 'character_count' in locals() else None, # Pass counts if calculated
-            word_count=word_count if 'word_count' in locals() else None
+            character_count=character_count, # Pass counts if calculated
+            word_count=word_count
         )
-        # --- Pass dictionary directly to crud.update_result ---
-        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR})
+        if result: await crud.update_result(result_id=result.id, update_data={"status": ResultStatus.ERROR}, teacher_id=auth_teacher_id) # Added teacher_id
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save assessment result.")
 
 

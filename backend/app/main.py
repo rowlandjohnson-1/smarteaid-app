@@ -21,7 +21,7 @@ from app.api.v1.endpoints.schools import router as schools_router
 from app.api.v1.endpoints.teachers import router as teachers_router
 from app.api.v1.endpoints.class_groups import router as class_groups_router
 from app.api.v1.endpoints.students import router as students_router
-from app.api.v1.endpoints.assignments import router as assignments_router
+# from app.api.v1.endpoints.assignments import router as assignments_router # COMMENTED OUT
 from app.api.v1.endpoints.documents import router as documents_router
 from app.api.v1.endpoints.results import router as results_router
 from app.api.v1.endpoints.dashboard import router as dashboard_router
@@ -169,7 +169,7 @@ app.include_router(schools_router, prefix=API_V1_PREFIX)
 app.include_router(teachers_router, prefix=API_V1_PREFIX)
 app.include_router(class_groups_router, prefix=API_V1_PREFIX)
 app.include_router(students_router, prefix=API_V1_PREFIX)
-app.include_router(assignments_router, prefix=API_V1_PREFIX)
+# app.include_router(assignments_router, prefix=API_V1_PREFIX) # COMMENTED OUT
 app.include_router(documents_router, prefix=API_V1_PREFIX) # Includes documents router
 app.include_router(results_router, prefix=API_V1_PREFIX)   # Includes results router
 app.include_router(dashboard_router, prefix=API_V1_PREFIX) # NEW: Include dashboard router

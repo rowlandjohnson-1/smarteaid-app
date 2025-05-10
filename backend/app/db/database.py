@@ -103,15 +103,19 @@ async def check_database_health() -> Dict[str, Any]:
     try:
         from ..db import crud # Try importing crud to get constants
         EXPECTED_COLLECTIONS = [
-            crud.SCHOOL_COLLECTION, crud.TEACHER_COLLECTION, crud.CLASSGROUP_COLLECTION,
-            crud.STUDENT_COLLECTION, crud.ASSIGNMENT_COLLECTION, crud.DOCUMENT_COLLECTION,
-            crud.RESULT_COLLECTION
+            crud.SCHOOL_COLLECTION,
+            crud.TEACHER_COLLECTION,
+            crud.CLASSGROUP_COLLECTION,
+            crud.STUDENT_COLLECTION,
+            crud.DOCUMENT_COLLECTION,
+            crud.RESULT_COLLECTION,
+            crud.BATCH_COLLECTION
         ]
     except ImportError:
          # Fallback if crud cannot be imported here
          EXPECTED_COLLECTIONS = [
             "schools", "teachers", "classgroups", "students",
-            "assignments", "documents", "results"
+            "documents", "results", "batches"
          ]
 
 

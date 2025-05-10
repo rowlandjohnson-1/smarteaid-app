@@ -128,16 +128,29 @@ class BatchProcessor:
 
     async def _process_document(self, document: Document) -> bool:
         """Process a single document in the batch."""
+        if not document.teacher_id:
+            logger.error(f"Document {document.id} is missing teacher_id. Cannot process.")
+            # Optionally, update the document's status to ERROR here if desired,
+            # but that would also require teacher_id.
+            # For now, just log and return, preventing further processing.
+            return False
+
+        character_count: Optional[int] = None
+        word_count: Optional[int] = None
+
         try:
+            logger.info(f"Processing document {document.id} for teacher {document.teacher_id}")
             # Update document status to PROCESSING
             await crud.update_document_status(
                 document_id=document.id,
+                teacher_id=document.teacher_id,
                 status=DocumentStatus.PROCESSING
             )
 
             # Download file from blob storage
             file_bytes = await download_blob_as_bytes(document.storage_blob_path)
             if not file_bytes:
+                logger.error(f"Failed to download file from storage for document {document.id}")
                 raise Exception("Failed to download file from storage")
 
             # Extract text from document
@@ -145,36 +158,65 @@ class BatchProcessor:
                 file_bytes=file_bytes,
                 file_type=document.file_type
             )
-            if not text_content:
-                raise Exception("Failed to extract text from document")
+            if not text_content: # Assuming empty string means failure or no text
+                logger.warning(f"Failed to extract text or no text content for document {document.id}")
+                # Depending on requirements, this might be an error or just a doc with no content
+                # For now, we'll allow it to proceed to COMPLETED but with no counts.
+                # If it should be an error, raise Exception("Failed to extract text from document")
+            else:
+                character_count = len(text_content)
+                word_count = len(text_content.split())
+
 
             # TODO: Call AI assessment service
             # For now, just update status to COMPLETED
+            logger.info(f"Updating document {document.id} to COMPLETED for teacher {document.teacher_id} with char_count: {character_count}, word_count: {word_count}")
             await crud.update_document_status(
                 document_id=document.id,
-                status=DocumentStatus.COMPLETED
+                teacher_id=document.teacher_id,
+                status=DocumentStatus.COMPLETED,
+                character_count=character_count,
+                word_count=word_count
             )
 
             # Update result status
-            await crud.update_result(
-                result_id=document.id,
-                update_data={"status": ResultStatus.COMPLETED.value}
-            )
+            # Assuming document.id is also the result_id, which might be a simplification.
+            # If result is a separate entity, it should be fetched or created with its own ID.
+            # The crud.update_result function also needs to be checked if it requires teacher_id.
+            # For now, focusing on update_document_status.
+            result_to_update = await crud.get_result_by_document_id(document_id=document.id, teacher_id=document.teacher_id)
+            if result_to_update:
+                await crud.update_result(
+                    result_id=result_to_update.id, # Use the actual result_id
+                    # Ensure teacher_id is handled correctly in update_result if needed by that function
+                    update_data={"status": ResultStatus.COMPLETED.value}
+                )
+            else:
+                logger.warning(f"No result found for document {document.id} to update to COMPLETED status.")
+
 
             return True
 
         except Exception as e:
-            logger.error(f"Error processing document {document.id}: {e}")
+            logger.error(f"Error processing document {document.id} for teacher {document.teacher_id}: {e}", exc_info=True)
             # Update document status to ERROR
             await crud.update_document_status(
                 document_id=document.id,
-                status=DocumentStatus.ERROR
+                teacher_id=document.teacher_id,
+                status=DocumentStatus.ERROR,
+                character_count=character_count, # Pass counts if available
+                word_count=word_count
             )
-            # Update result status
-            await crud.update_result(
-                result_id=document.id,
-                update_data={"status": ResultStatus.ERROR.value}
-            )
+            # Update result status to ERROR
+            result_to_update_on_error = await crud.get_result_by_document_id(document_id=document.id, teacher_id=document.teacher_id, include_deleted=True) # include_deleted in case it was soft-deleted
+            if result_to_update_on_error:
+                await crud.update_result(
+                    result_id=result_to_update_on_error.id,
+                     # Ensure teacher_id is handled correctly in update_result if needed
+                    update_data={"status": ResultStatus.ERROR.value}
+                )
+            else:
+                logger.warning(f"No result found for document {document.id} to update to ERROR status.")
             return False
 
     def stop(self):

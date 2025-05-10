@@ -31,7 +31,6 @@ from app.models.teacher import Teacher, TeacherCreate, TeacherUpdate, TeacherRol
 # ------------------------------------
 from app.models.class_group import ClassGroup, ClassGroupCreate, ClassGroupUpdate
 from app.models.student import Student, StudentCreate, StudentUpdate
-from app.models.assignment import Assignment, AssignmentCreate, AssignmentUpdate
 from app.models.document import Document, DocumentCreate, DocumentUpdate
 from app.models.result import Result, ResultCreate, ResultUpdate, ResultStatus
 # --- Import Enums used in Teacher model ---
@@ -46,7 +45,7 @@ SCHOOL_COLLECTION = "schools"
 TEACHER_COLLECTION = "teachers"
 CLASSGROUP_COLLECTION = "classgroups"
 STUDENT_COLLECTION = "students"
-ASSIGNMENT_COLLECTION = "assignments"
+# ASSIGNMENT_COLLECTION = "assignments" # COMMENTED OUT
 DOCUMENT_COLLECTION = "documents"
 RESULT_COLLECTION = "results"
 
@@ -134,7 +133,7 @@ async def create_school(school_in: SchoolCreate, session=None) -> Optional[Schoo
     if collection is None: return None
     new_school_id = uuid.uuid4()
     school_doc = school_in.model_dump(); school_doc["_id"] = new_school_id
-    school_doc["created_at"] = now; school_doc["updated_at"] = now; school_doc["deleted_at"] = None
+    school_doc["created_at"] = now; school_doc["updated_at"] = now; school_doc["is_deleted"] = False
     logger.info(f"Inserting school: {school_doc['_id']}")
     try:
         inserted_result = await collection.insert_one(school_doc, session=session)
@@ -176,10 +175,10 @@ async def update_school(school_id: uuid.UUID, school_in: SchoolUpdate, session=N
     collection = _get_collection(SCHOOL_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
     update_data = school_in.model_dump(exclude_unset=True)
-    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("deleted_at", None)
+    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None)
     if not update_data: logger.warning(f"No update data for school {school_id}"); return await get_school_by_id(school_id, include_deleted=False, session=session)
     update_data["updated_at"] = now; logger.info(f"Updating school {school_id}")
-    query_filter = {"_id": school_id, "deleted_at": None}
+    query_filter = {"_id": school_id, "is_deleted": {"$ne": True}}
     try:
         updated_doc = await collection.find_one_and_update(query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
         if updated_doc: return School(**updated_doc) # Assumes schema handles alias
@@ -194,7 +193,15 @@ async def delete_school(school_id: uuid.UUID, hard_delete: bool = False, session
     count = 0
     try:
         if hard_delete: result = await collection.delete_one({"_id": school_id}, session=session); count = result.deleted_count
-        else: result = await collection.update_one({"_id": school_id, "deleted_at": None}, {"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count
+        else:
+            now = datetime.now(timezone.utc)
+            update_payload = {"is_deleted": True, "updated_at": now}
+            result = await collection.update_one(
+                {"_id": school_id, "is_deleted": {"$ne": True}},
+                {"$set": update_payload},
+                session=session
+            )
+            count = result.modified_count
     except Exception as e: logger.error(f"Error deleting school: {e}", exc_info=True); return False
     if count == 1: logger.info(f"Successfully deleted school {school_id}"); return True
     else: logger.warning(f"School {school_id} not found or already deleted."); return False
@@ -229,7 +236,7 @@ async def create_teacher(
     teacher_doc["kinde_id"] = kinde_id    # Add the Kinde ID
 
     # Set timestamps and soft delete status
-    teacher_doc["created_at"] = now; teacher_doc["updated_at"] = now; teacher_doc["deleted_at"] = None
+    teacher_doc["created_at"] = now; teacher_doc["updated_at"] = now; teacher_doc["is_deleted"] = False
 
     # Ensure defaults from TeacherBase are applied if not explicitly in TeacherCreate dump
     # Pydantic v2 model_dump includes defaults by default
@@ -272,7 +279,7 @@ async def get_teacher_by_id(teacher_id: str, session=None) -> Optional[Teacher]:
     logger.info(f"Getting teacher by internal ID: {teacher_id}")
     try:
         # Ensure ID is searched as string
-        teacher_doc = await collection.find_one({"_id": teacher_id}, session=session)
+        teacher_doc = await collection.find_one({"_id": teacher_id, "is_deleted": {"$ne": True}}, session=session)
         if teacher_doc:
             # Convert _id to string BEFORE Pydantic validation if it's a UUID
             if isinstance(teacher_doc.get("_id"), uuid.UUID):
@@ -289,7 +296,7 @@ async def get_teacher_by_kinde_id(kinde_id: str, session=None) -> Optional[Teach
     if collection is None: return None
     logger.info(f"Getting teacher by kinde_id: {kinde_id}")
     try:
-        teacher_doc = await collection.find_one({"kinde_id": kinde_id}, session=session)
+        teacher_doc = await collection.find_one({"kinde_id": kinde_id, "is_deleted": {"$ne": True}}, session=session)
         if teacher_doc:
             # Convert _id to string BEFORE Pydantic validation if it's a UUID
             if isinstance(teacher_doc.get("_id"), uuid.UUID):
@@ -337,7 +344,7 @@ async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None)
     # Remove fields that should not be updated directly
     update_data.pop("_id", None); update_data.pop("id", None)
     update_data.pop("kinde_id", None)
-    update_data.pop("created_at", None); update_data.pop("deleted_at", None)
+    update_data.pop("created_at", None)
     update_data.pop("how_did_you_hear", None)
     update_data.pop("email", None) # Don't allow email update via profile
 
@@ -349,7 +356,7 @@ async def update_teacher(kinde_id: str, teacher_in: TeacherUpdate, session=None)
     update_data["updated_at"] = now
     logger.info(f"Updating teacher with Kinde ID {kinde_id} with data: {update_data}")
 
-    query_filter = {"kinde_id": kinde_id, "deleted_at": None}
+    query_filter = {"kinde_id": kinde_id, "is_deleted": {"$ne": True}}
 
     try:
         updated_doc = await collection.find_one_and_update(
@@ -388,11 +395,11 @@ async def delete_teacher(kinde_id: str, hard_delete: bool = False, session=None)
             count = result.deleted_count
         else:
             now = datetime.now(timezone.utc)
-            query_filter_soft = {"kinde_id": kinde_id, "deleted_at": None}
+            update_payload = {"is_deleted": True, "updated_at": now}
             result = await collection.update_one(
-                query_filter_soft,
-                {"$set": {"deleted_at": now, "updated_at": now}},
-                session=session # Pass session
+                {"kinde_id": kinde_id, "is_deleted": {"$ne": True}},
+                {"$set": update_payload},
+                session=session
             );
             count = result.modified_count
     except Exception as e:
@@ -420,7 +427,7 @@ async def create_class_group(
     doc["_id"] = new_id;
     doc["teacher_id"] = teacher_id # ADD the passed teacher_id to the document
     doc.setdefault("student_ids", [])
-    doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
+    doc["created_at"] = now; doc["updated_at"] = now; doc["is_deleted"] = False
     logger.info(f"Inserting class group: {doc['_id']} for teacher: {teacher_id}")
     try: inserted_result = await collection.insert_one(doc, session=session) # Pass session if provided
     except Exception as e: logger.error(f"Error inserting class group: {e}", exc_info=True); return None
@@ -459,18 +466,22 @@ async def get_all_class_groups( teacher_id: Optional[uuid.UUID] = None, school_i
     return items_list
 
 @with_transaction
-async def update_class_group(class_group_id: uuid.UUID, class_group_in: ClassGroupUpdate, session=None) -> Optional[ClassGroup]:
+async def update_class_group(class_group_id: uuid.UUID, teacher_id: str, class_group_in: ClassGroupUpdate, session=None) -> Optional[ClassGroup]:
     collection = _get_collection(CLASSGROUP_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
     update_data = class_group_in.model_dump(exclude_unset=True)
     update_data.pop("_id", None); update_data.pop("id", None); # Pop internal 'id' if present
-    update_data.pop("created_at", None); update_data.pop("deleted_at", None)
+    update_data.pop("created_at", None)
     # Prevent changing teacher/school association via this update if needed
-    # update_data.pop("teacher_id", None)
+    # update_data.pop("teacher_id", None) # Teacher ID should not be changed here
     # update_data.pop("school_id", None)
-    if not update_data: logger.warning(f"No update data for class group {class_group_id}"); return await get_class_group_by_id(class_group_id, include_deleted=False, session=session)
-    update_data["updated_at"] = now; logger.info(f"Updating class group {class_group_id}")
-    query_filter = {"_id": class_group_id, "deleted_at": None} # Query by _id
+    if not update_data: 
+        logger.warning(f"No update data for class group {class_group_id}")
+        # Need to fetch class_group by id and teacher_id if we are to implement RBAC here
+        # For now, just getting by id, assuming teacher_id check is for the update operation itself.
+        return await get_class_group_by_id(class_group_id, include_deleted=False, session=session)
+    update_data["updated_at"] = now; logger.info(f"Updating class group {class_group_id} for teacher {teacher_id}")
+    query_filter = {"_id": class_group_id, "teacher_id": teacher_id, "is_deleted": {"$ne": True}}
     try:
         updated_doc = await collection.find_one_and_update( query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
         if updated_doc: return ClassGroup(**updated_doc) # Assumes schema handles alias
@@ -478,19 +489,34 @@ async def update_class_group(class_group_id: uuid.UUID, class_group_in: ClassGro
     except Exception as e: logger.error(f"Error during class group update operation: {e}", exc_info=True); return None
 
 @with_transaction
-async def delete_class_group(class_group_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
+async def delete_class_group(class_group_id: uuid.UUID, teacher_id: str, hard_delete: bool = False, session=None) -> bool:
     collection = _get_collection(CLASSGROUP_COLLECTION)
     if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting class group {class_group_id}")
+    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting class group {class_group_id} for teacher {teacher_id}")
     count = 0
+    query_base = {"_id": class_group_id, "teacher_id": teacher_id}
     try:
-        if hard_delete: result = await collection.delete_one({"_id": class_group_id}, session=session); count = result.deleted_count # Query by _id
+        if hard_delete: 
+            result = await collection.delete_one(query_base, session=session)
+            count = result.deleted_count
         else:
             now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": class_group_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
-    except Exception as e: logger.error(f"Error deleting class group: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Class group {class_group_id} not found or already deleted."); return False
+            # For soft delete, also ensure it's not already deleted
+            soft_delete_query = {**query_base, "is_deleted": {"$ne": True}}
+            result = await collection.update_one(
+                soft_delete_query,
+                {"$set": {"is_deleted": True, "updated_at": now}}, session=session
+            )
+            count = result.modified_count
+    except Exception as e: 
+        logger.error(f"Error deleting class group {class_group_id} for teacher {teacher_id}: {e}", exc_info=True)
+        return False
+    if count == 1: 
+        logger.info(f"Successfully deleted class group {class_group_id} for teacher {teacher_id}")
+        return True
+    else: 
+        logger.warning(f"Class group {class_group_id} not found for teacher {teacher_id} or already deleted.")
+        return False
 
 # --- START: NEW CRUD FUNCTIONS for ClassGroup <-> Student Relationship ---
 @with_transaction
@@ -509,7 +535,11 @@ async def add_student_to_class_group(
         return False
     now = datetime.now(timezone.utc)
     logger.info(f"Attempting to add student {student_id} to class group {class_group_id}")
-    query_filter = {"_id": class_group_id, "deleted_at": None}
+    # RBAC check for add_student_to_class_group: 
+    # The calling layer should ensure teacher_id from token owns the class_group_id.
+    # This function currently trusts class_group_id is valid for the context.
+    # If direct RBAC needed here, add teacher_id to signature and query.
+    query_filter = {"_id": class_group_id, "is_deleted": {"$ne": True}}
     update_operation = {
         "$addToSet": {"student_ids": student_id},  # Use $addToSet to avoid duplicates
         "$set": {"updated_at": now},
@@ -555,7 +585,8 @@ async def remove_student_from_class_group(
         return False
     now = datetime.now(timezone.utc)
     logger.info(f"Attempting to remove student {student_id} from class group {class_group_id}")
-    query_filter = {"_id": class_group_id, "deleted_at": None}
+    # RBAC check for remove_student_from_class_group: Similar to add_student_to_class_group
+    query_filter = {"_id": class_group_id, "is_deleted": {"$ne": True}}
     update_operation = {
         "$pull": {"student_ids": student_id},  # Use $pull to remove the specific student ID
         "$set": {"updated_at": now},
@@ -592,18 +623,22 @@ async def remove_student_from_class_group(
 # --- Student CRUD Functions (Keep existing) ---
 @with_transaction
 async def create_student(student_in: StudentCreate, teacher_id: str, session=None) -> Optional[Student]:
-    """
-    Creates a new student record in the database.
-
-    Args:
-        student_in: Pydantic model containing student data to create.
-        teacher_id: The Kinde ID of the teacher creating the student. # Add teacher_id docstring
-        session: Optional Motor session for transaction management.
-
-    Returns:
-        The created Student object or None if creation failed.
-    """
     collection = _get_collection(STUDENT_COLLECTION)
+    if collection is None:
+        logger.error(f"Failed to get collection {STUDENT_COLLECTION}")
+        return None
+
+    # Ensure the collection exists before starting a transaction for insert
+    # by performing a lightweight, non-transactional read operation.
+    # This is to prevent "OperationNotSupportedInTransaction" error in Cosmos DB
+    # when a collection is auto-created during a transaction.
+    # try:
+    #     await collection.count_documents({}, limit=1) # No session here
+    # except Exception as e:
+    #     logger.error(f"Error ensuring collection {STUDENT_COLLECTION} exists: {e}", exc_info=True)
+    #     # Depending on the desired behavior, you might want to return None or raise
+    #     return None
+
     now = datetime.now(timezone.utc)
     if collection is None:
         return None
@@ -616,7 +651,7 @@ async def create_student(student_in: StudentCreate, teacher_id: str, session=Non
     student_doc["teacher_id"] = teacher_id # Add teacher_id to the document
     student_doc["created_at"] = now
     student_doc["updated_at"] = now
-    student_doc["deleted_at"] = None
+    student_doc["is_deleted"] = False
     # We might need to explicitly add teacher_id here if it's not in student_in
     # Example: student_doc["teacher_id"] = teacher_id_passed_to_function
 
@@ -649,8 +684,8 @@ async def get_student_by_id(
     collection = _get_collection(STUDENT_COLLECTION);
     if collection is None: return None
     logger.info(f"Getting student: {student_internal_id} for teacher: {teacher_id}") # Update log
-    query = {"_id": student_internal_id, "teacher_id": teacher_id}; # <<< MODIFIED: Add teacher_id check
-    query.update(soft_delete_filter(include_deleted)) # Query by _id
+    query = {"_id": student_internal_id, "teacher_id": teacher_id}
+    query.update(soft_delete_filter(include_deleted))
     try:
         student_doc = await collection.find_one(query, session=session)
         if student_doc:
@@ -702,15 +737,17 @@ async def get_all_students(
     return students_list
 
 @with_transaction
-async def update_student(student_internal_id: uuid.UUID, student_in: StudentUpdate, session=None) -> Optional[Student]:
+async def update_student(student_internal_id: uuid.UUID, teacher_id: str, student_in: StudentUpdate, session=None) -> Optional[Student]:
     collection = _get_collection(STUDENT_COLLECTION); now = datetime.now(timezone.utc)
     if collection is None: return None
     update_data = student_in.model_dump(exclude_unset=True)
-    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("deleted_at", None)
+    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("is_deleted", None)
     if "external_student_id" in update_data and update_data["external_student_id"] == "": update_data["external_student_id"] = None
-    if not update_data: logger.warning(f"No update data provided for student {student_internal_id}"); return await get_student_by_id(student_internal_id, include_deleted=False, session=session)
-    update_data["updated_at"] = now; logger.info(f"Updating student {student_internal_id}")
-    query_filter = {"_id": student_internal_id, "deleted_at": None} # Query by _id
+    if not update_data: 
+        logger.warning(f"No update data provided for student {student_internal_id}")
+        return await get_student_by_id(student_internal_id, teacher_id=teacher_id, include_deleted=False, session=session)
+    update_data["updated_at"] = now; logger.info(f"Updating student {student_internal_id} for teacher {teacher_id}")
+    query_filter = {"_id": student_internal_id, "teacher_id": teacher_id, "is_deleted": {"$ne": True}}
     try:
         updated_doc = await collection.find_one_and_update( query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
         if updated_doc:
@@ -727,94 +764,34 @@ async def update_student(student_internal_id: uuid.UUID, student_in: StudentUpda
         logger.error(f"Error during student update operation for {student_internal_id}: {e}", exc_info=True); return None
 
 @with_transaction
-async def delete_student(student_internal_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
+async def delete_student(student_internal_id: uuid.UUID, teacher_id: str, hard_delete: bool = False, session=None) -> bool:
     collection = _get_collection(STUDENT_COLLECTION)
     if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting student {student_internal_id}")
+    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting student {student_internal_id} for teacher {teacher_id}")
     count = 0
+    query_base = {"_id": student_internal_id, "teacher_id": teacher_id}
     try:
-        if hard_delete: result = await collection.delete_one({"_id": student_internal_id}, session=session); count = result.deleted_count # Query by _id
+        if hard_delete: 
+            result = await collection.delete_one(query_base, session=session)
+            count = result.deleted_count
         else:
             now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": student_internal_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count # Query by _id
-    except Exception as e: logger.error(f"Error deleting student: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Student {student_internal_id} not found or already deleted."); return False
-
-
-# --- Assignment CRUD Functions (Keep existing) ---
-@with_transaction
-async def create_assignment(assignment_in: AssignmentCreate, session=None) -> Optional[Assignment]:
-    collection = _get_collection(ASSIGNMENT_COLLECTION); now = datetime.now(timezone.utc)
-    if collection is None: return None
-    assignment_id = uuid.uuid4()
-    assignment_doc = assignment_in.model_dump(); assignment_doc["_id"] = assignment_id
-    assignment_doc["created_at"] = now; assignment_doc["updated_at"] = now; assignment_doc["deleted_at"] = None
-    logger.info(f"Inserting assignment: {assignment_doc['_id']}")
-    try: inserted_result = await collection.insert_one(assignment_doc, session=session)
-    except Exception as e: logger.error(f"Error inserting assignment: {e}", exc_info=True); return None
-    if inserted_result.acknowledged: created_doc = await collection.find_one({"_id": assignment_id}, session=session)
-    else: logger.error(f"Insert assignment not acknowledged: {assignment_id}"); return None
-    if created_doc: return Assignment(**created_doc)
-    else: logger.error(f"Failed retrieve assignment post-insert: {assignment_id}"); return None
-
-async def get_assignment_by_id(assignment_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Assignment]:
-    collection = _get_collection(ASSIGNMENT_COLLECTION);
-    if collection is None: return None
-    logger.info(f"Getting assignment: {assignment_id}")
-    query = {"_id": assignment_id}; query.update(soft_delete_filter(include_deleted))
-    try: assignment_doc = await collection.find_one(query, session=session)
-    except Exception as e: logger.error(f"Error getting assignment: {e}", exc_info=True); return None
-    if assignment_doc: return Assignment(**assignment_doc)
-    else: logger.warning(f"Assignment {assignment_id} not found."); return None
-
-async def get_all_assignments( class_group_id: Optional[uuid.UUID] = None, skip: int = 0, limit: int = 100, include_deleted: bool = False, session=None) -> List[Assignment]:
-    collection = _get_collection(ASSIGNMENT_COLLECTION); assignments_list: List[Assignment] = []
-    if collection is None: return assignments_list
-    filter_query = soft_delete_filter(include_deleted)
-    if class_group_id: filter_query["class_group_id"] = class_group_id
-    logger.info(f"Getting all assignments filter={filter_query} skip={skip} limit={limit}")
-    try:
-        cursor = collection.find(filter_query, session=session).skip(skip).limit(limit)
-        async for doc in cursor:
-            try:
-                mapped_data = {**doc}
-                if "_id" in mapped_data: mapped_data["id"] = mapped_data.pop("_id")
-                else: logger.warning(f"Assignment doc missing '_id': {doc}"); continue
-                assignments_list.append(Assignment(**mapped_data))
-            except Exception as validation_err: logger.error(f"Pydantic validation failed for assignment doc {doc.get('_id', 'UNKNOWN')}: {validation_err}")
-    except Exception as e: logger.error(f"Error getting all assignments: {e}", exc_info=True)
-    return assignments_list
-
-@with_transaction
-async def update_assignment(assignment_id: uuid.UUID, assignment_in: AssignmentUpdate, session=None) -> Optional[Assignment]:
-    collection = _get_collection(ASSIGNMENT_COLLECTION); now = datetime.now(timezone.utc)
-    if collection is None: return None
-    update_data = assignment_in.model_dump(exclude_unset=True)
-    update_data.pop("_id", None); update_data.pop("id", None); update_data.pop("created_at", None); update_data.pop("class_group_id", None); update_data.pop("deleted_at", None)
-    if not update_data: logger.warning(f"No update data for assignment {assignment_id}"); return await get_assignment_by_id(assignment_id, include_deleted=False, session=session)
-    update_data["updated_at"] = now; logger.info(f"Updating assignment {assignment_id}")
-    query_filter = {"_id": assignment_id, "deleted_at": None}
-    try:
-        updated_doc = await collection.find_one_and_update( query_filter, {"$set": update_data}, return_document=ReturnDocument.AFTER, session=session)
-        if updated_doc: return Assignment(**updated_doc)
-        else: logger.warning(f"Assignment {assignment_id} not found or already deleted for update."); return None
-    except Exception as e: logger.error(f"Error during assignment update operation: {e}", exc_info=True); return None
-
-@with_transaction
-async def delete_assignment(assignment_id: uuid.UUID, hard_delete: bool = False, session=None) -> bool:
-    collection = _get_collection(ASSIGNMENT_COLLECTION)
-    if collection is None: return False
-    logger.info(f"{'Hard' if hard_delete else 'Soft'} deleting assignment {assignment_id}")
-    count = 0
-    try:
-        if hard_delete: result = await collection.delete_one({"_id": assignment_id}, session=session); count = result.deleted_count
-        else:
-            now = datetime.now(timezone.utc)
-            result = await collection.update_one({"_id": assignment_id, "deleted_at": None},{"$set": {"deleted_at": now, "updated_at": now}}, session=session); count = result.modified_count
-    except Exception as e: logger.error(f"Error deleting assignment: {e}", exc_info=True); return False
-    if count == 1: return True
-    else: logger.warning(f"Assignment {assignment_id} not found or already deleted."); return False
+            # For soft delete, also ensure it's not already deleted
+            soft_delete_query = {**query_base, "is_deleted": {"$ne": True}}
+            result = await collection.update_one(
+                soft_delete_query, 
+                {"$set": {"is_deleted": True, "updated_at": now}}, session=session
+            )
+            count = result.modified_count
+    except Exception as e: 
+        logger.error(f"Error deleting student {student_internal_id} for teacher {teacher_id}: {e}", exc_info=True)
+        return False
+    if count == 1: 
+        logger.info(f"Successfully deleted student {student_internal_id} for teacher {teacher_id}")
+        return True
+    else: 
+        logger.warning(f"Student {student_internal_id} not found for teacher {teacher_id} or already deleted.")
+        return False
 
 
 # --- Document CRUD Functions (Keep existing) ---
@@ -830,7 +807,7 @@ async def create_document(document_in: DocumentCreate, session=None) -> Optional
     # Explicitly add teacher_id from the input model
     if hasattr(document_in, 'teacher_id') and document_in.teacher_id:
         doc["teacher_id"] = document_in.teacher_id
-    doc["_id"] = document_id; doc["created_at"] = now; doc["updated_at"] = now; doc["deleted_at"] = None
+    doc["_id"] = document_id; doc["created_at"] = now; doc["updated_at"] = now; doc["is_deleted"] = False
     logger.info(f"Inserting document metadata: {doc['_id']}")
     try:
         inserted_result = await collection.insert_one(doc, session=session)
@@ -849,8 +826,8 @@ async def get_document_by_id(
     collection = _get_collection(DOCUMENT_COLLECTION)
     if collection is None: return None
     logger.info(f"Getting document: {document_id} for teacher: {teacher_id}") # Update log
-    query = {"_id": document_id, "teacher_id": teacher_id}; # <<< MODIFIED: Add teacher_id to query
-    query.update(soft_delete_filter(include_deleted)) # Query by _id
+    query = {"_id": document_id, "teacher_id": teacher_id}
+    query.update(soft_delete_filter(include_deleted))
     try: doc = await collection.find_one(query, session=session)
     except Exception as e: logger.error(f"Error getting document: {e}", exc_info=True); return None
     if doc: return Document(**doc) # Assumes schema handles alias
@@ -907,6 +884,7 @@ async def get_all_documents(
 @with_transaction
 async def update_document_status(
     document_id: uuid.UUID,
+    teacher_id: str, # ADDED teacher_id for RBAC
     status: DocumentStatus,
     character_count: Optional[int] = None, # New optional parameter
     word_count: Optional[int] = None,      # New optional parameter
@@ -928,8 +906,8 @@ async def update_document_status(
         logger.info(f"Including word_count={word_count} in update for document {document_id}")
     # <<< END EDIT >>>
 
-    logger.info(f"Updating document {document_id} status to {status.value} and counts if provided.") # Updated log
-    query_filter = {"_id": document_id, "deleted_at": None} # Query by _id
+    logger.info(f"Updating document {document_id} for teacher {teacher_id} status to {status.value} and counts if provided.")
+    query_filter = {"_id": document_id, "teacher_id": teacher_id, "is_deleted": {"$ne": True}}
 
     # <<< START EDIT: Add logging before DB call >>>
     logger.debug(f"Attempting find_one_and_update for doc {document_id} with $set payload: {update_data}")
@@ -987,6 +965,7 @@ async def delete_document(document_id: uuid.UUID, teacher_id: str, session=None)
     blob_path_to_delete = document.storage_blob_path
     result_to_delete = await get_result_by_document_id(
         document_id=document_id,
+        teacher_id=teacher_id, # Pass teacher_id here
         include_deleted=True, # Also fetch associated result even if soft-deleted
         session=None # REMOVED session
     )
@@ -1019,9 +998,9 @@ async def delete_document(document_id: uuid.UUID, teacher_id: str, session=None)
     result = await collection.update_one(
         # OLD Filter: {"_id": document_id, "is_deleted": False},
         # NEW Filter: Match if is_deleted is not True (handles False, null, missing)
-        {"_id": document_id, "is_deleted": {"$ne": True}}, 
+        {"_id": document_id, "teacher_id": teacher_id, "is_deleted": {"$ne": True}}, 
         {"$set": {"is_deleted": True, "updated_at": now}},
-        session=None
+        session=session # Pass session to the update_one call
     )
     count = result.modified_count
 
@@ -1040,34 +1019,55 @@ async def delete_document(document_id: uuid.UUID, teacher_id: str, session=None)
     return delete_success # Let any exceptions from await calls above propagate
 
 # --- Optional: Add logging to get_result_by_document_id ---
-async def get_result_by_document_id(document_id: uuid.UUID, include_deleted: bool = False, session=None) -> Optional[Result]:
+async def get_result_by_document_id(document_id: uuid.UUID, teacher_id: Optional[str] = None, include_deleted: bool = False, session=None) -> Optional[Result]:
     collection = _get_collection(RESULT_COLLECTION)
-    if collection is None: return None
-    logger.info(f"Getting result for document: {document_id}")
-    query = {"document_id": document_id}; query.update(soft_delete_filter(include_deleted))
-    try:
-        doc = await collection.find_one(query, session=session)
-        if doc:
-            logger.debug(f"Raw data fetched from DB for doc {document_id}: {doc}") # Log raw data
-            try:
-                # --- Use model_validate ---
-                validated_result = Result.model_validate(doc)
-                # --- End change ---
-                logger.debug(f"Validated Result object for doc {document_id} has paragraph_results: {'Yes' if validated_result.paragraph_results else 'No'}")
-                return validated_result
-            except Exception as pydantic_err:
-                 logger.error(f"Pydantic validation failed for result fetched for doc {document_id}: {pydantic_err}", exc_info=True)
-                 return None # Failed validation
-        else:
-            logger.info(f"Result for document {document_id} not found.");
-            return None
-    except Exception as e:
-        logger.error(f"Error getting result by doc id {document_id}: {e}", exc_info=True);
+    if collection is None:
         return None
-# --- End optional logging ---
+    
+    query = {"document_id": document_id}
+    if teacher_id:
+        query["teacher_id"] = teacher_id
+        logger.info(f"Getting result for document: {document_id} and teacher: {teacher_id}")
+    else:
+        logger.info(f"Getting result for document: {document_id}")
+        
+    query.update(soft_delete_filter(include_deleted))
+    
+    # Add logging to show the actual query being made
+    logger.debug(f"Executing find_one for result with query: {query}")
 
-# <<< START NEW FUNCTION: create_result >>>
-# @with_transaction # Decide if transactions are needed for single insert
+    try:
+        result_doc = await collection.find_one(query, session=session)
+    except Exception as e:
+        logger.error(f"Error getting result by document_id {document_id}: {e}", exc_info=True)
+        return None
+
+    if result_doc:
+        # Add detailed logging for the fetched document before parsing
+        logger.debug(f"Raw data fetched from DB for doc {document_id}: {result_doc}")
+        try:
+            # Map Pydantic field names (like id) from DB field names (_id)
+            # This explicit mapping is safer if aliases are not universally working or understood
+            mapped_data = {**result_doc}
+            if "_id" in mapped_data:
+                mapped_data["id"] = mapped_data.pop("_id")
+            
+            # Log the data being passed to the Pydantic model
+            logger.debug(f"Data being passed to Result model for doc {document_id}: {mapped_data}")
+            
+            return Result(**mapped_data)
+        except ValidationError as ve:
+            logger.error(f"Pydantic validation error for result of document {document_id}: {ve}", exc_info=True)
+            return None
+        except Exception as model_ex: # Catch any other model instantiation errors
+            logger.error(f"Error creating Result model instance for doc {document_id}: {model_ex}", exc_info=True)
+            return None
+    else:
+        logger.warning(f"Result not found for document: {document_id} with current filters.")
+        return None
+
+# --- Result Create, Update, Delete ---
+@with_transaction
 async def create_result(result_in: ResultCreate, session=None) -> Optional[Result]:
     """
     Creates a new result record in the database, typically with a PENDING status.
@@ -1094,7 +1094,7 @@ async def create_result(result_in: ResultCreate, session=None) -> Optional[Resul
     result_doc["_id"] = new_result_id
     result_doc["created_at"] = now
     result_doc["updated_at"] = now
-    result_doc["deleted_at"] = None # Ensure soft delete field is initialized
+    result_doc["is_deleted"] = False # Ensure soft delete field is initialized
 
     # Set default status if not provided in result_in (should usually be PENDING)
     if "status" not in result_doc:
@@ -1129,24 +1129,17 @@ async def create_result(result_in: ResultCreate, session=None) -> Optional[Resul
     except Exception as e:
         logger.error(f"Error inserting result for document {result_doc.get('document_id')}: {e}", exc_info=True)
         return None
-# <<< END NEW FUNCTION: create_result >>>
 
 @with_transaction
 async def update_result(
     result_id: uuid.UUID,
     update_data: Dict[str, Any], # Pass update data as a dictionary
+    teacher_id: Optional[str] = None, # Add optional teacher_id for authorization
     session=None
 ) -> Optional[Result]:
     """
     Updates an existing result record by its ID.
-
-    Args:
-        result_id: The UUID of the result to update.
-        update_data: A dictionary containing the fields to update.
-        session: Optional MongoDB session for transactions.
-
-    Returns:
-        The updated Result object, or None if not found or on error.
+    Optionally checks teacher_id if provided.
     """
     collection = _get_collection(RESULT_COLLECTION)
     now = datetime.now(timezone.utc)
@@ -1159,7 +1152,11 @@ async def update_result(
     update_data.pop("id", None)
     update_data.pop("created_at", None) # Don't allow updating creation time
     update_data.pop("document_id", None) # Don't allow changing the linked document
-    update_data.pop("teacher_id", None) # Don't allow changing the teacher ID here
+    
+    # IMPORTANT: Do not pop teacher_id from update_data if it's part of the Result model's updatable fields
+    # If teacher_id is only for auth here, it's not part of $set.
+    # For now, let's assume teacher_id in Result model is not meant to be updated via this general function,
+    # and the teacher_id param is for query authorization.
 
     # Convert enums to their values if necessary (e.g., ResultStatus)
     if "status" in update_data and isinstance(update_data["status"], ResultStatus):
@@ -1168,15 +1165,21 @@ async def update_result(
     if not update_data:
         logger.warning(f"No valid update data provided for result {result_id}. Fetching current.")
         # If no fields left to update, maybe just return the current object
-        return await get_result_by_id(result_id=result_id, session=session) # Assuming get_result_by_id exists
+        # This call needs to be adapted if get_result_by_id also requires teacher_id for auth
+        return await get_result_by_id(result_id=result_id, teacher_id=teacher_id, session=session) 
 
     update_data["updated_at"] = now
 
-    logger.info(f"Attempting to update result {result_id} with data: {update_data}")
-
-    # Find and update the non-deleted result
+    # Build the query filter
     query_filter = {"_id": result_id, "is_deleted": {"$ne": True}}
+    if teacher_id:
+        query_filter["teacher_id"] = teacher_id
+        logger.info(f"Attempting to update result {result_id} for teacher {teacher_id} with data: {update_data}")
+    else:
+        logger.info(f"Attempting to update result {result_id} with data: {update_data} (no teacher_id specified for auth)")
+    
     update_operation = {"$set": update_data}
+    logger.debug(f"Executing find_one_and_update for result with query: {query_filter}, operation: {update_operation}")
 
     try:
         updated_doc = await collection.find_one_and_update(
@@ -1185,17 +1188,11 @@ async def update_result(
             return_document=ReturnDocument.AFTER,
             session=session
         )
-
         if updated_doc:
-            logger.info(f"Successfully updated result {result_id}")
-            # Validate and return the updated result
-            try:
-                return Result(**updated_doc)
-            except ValidationError as e:
-                logger.error(f"Validation error for updated result {result_id}: {e}", exc_info=True)
-                return None # Or raise an internal error
+            logger.debug(f"Raw updated result doc from DB: {updated_doc}")
+            return Result(**updated_doc)
         else:
-            logger.warning(f"Result {result_id} not found or already deleted, cannot update.")
+            logger.warning(f"Result {result_id} not found for update, or teacher_id mismatch if provided.")
             return None
     except Exception as e:
         logger.error(f"Error updating result {result_id}: {e}", exc_info=True)
@@ -1478,7 +1475,7 @@ async def bulk_create_schools(schools_in: List[SchoolCreate], session=None) -> L
     now = datetime.now(timezone.utc); school_docs = []; created_schools = []; inserted_ids = []
     for school_in in schools_in:
         school_id = uuid.uuid4(); school_doc = school_in.model_dump()
-        school_doc["_id"] = school_id; school_doc["created_at"] = now; school_doc["updated_at"] = now; school_doc["deleted_at"] = None
+        school_doc["_id"] = school_id; school_doc["created_at"] = now; school_doc["updated_at"] = now; school_doc["is_deleted"] = False
         school_docs.append(school_doc)
     try:
         result = await collection.insert_many(school_docs, session=session)
@@ -1506,11 +1503,11 @@ async def bulk_update_schools(updates: List[Dict[str, Any]], session=None) -> Li
             except Exception as validation_err: logger.warning(f"Skipping item due to validation error for school {school_id}: {validation_err}"); continue
 
             update_doc = update_model.model_dump(exclude_unset=True)
-            update_doc.pop("_id", None); update_doc.pop("id", None); update_doc.pop("created_at", None); update_doc.pop("deleted_at", None)
+            update_doc.pop("_id", None); update_doc.pop("id", None); update_doc.pop("created_at", None); update_doc.pop("is_deleted", None)
             if not update_doc: continue
             update_doc["updated_at"] = now
             result = await collection.find_one_and_update(
-                {"_id": school_id, "deleted_at": None}, {"$set": update_doc}, # Query by _id
+                {"_id": school_id, "is_deleted": {"$ne": True}}, {"$set": update_doc}, # Query by _id
                 return_document=ReturnDocument.AFTER, session=session )
             if result: updated_schools.append(School(**result)) # Assumes schema handles alias
             else: logger.warning(f"School {school_id} not found/deleted during bulk update.")
@@ -1524,7 +1521,12 @@ async def bulk_delete_schools(school_ids: List[uuid.UUID], hard_delete: bool = F
     deleted_count = 0
     try:
         if hard_delete: result = await collection.delete_many( {"_id": {"$in": school_ids}}, session=session); deleted_count = result.deleted_count # Query by _id
-        else: result = await collection.update_many({"_id": {"$in": school_ids}, "deleted_at": None},{"$set": {"deleted_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},session=session); deleted_count = result.modified_count # Query by _id
+        else:
+            result = await collection.update_many(
+                {"_id": {"$in": school_ids}, "is_deleted": {"$ne": True}},
+                {"$set": {"is_deleted": True, "updated_at": datetime.now(timezone.utc)}},
+                session=session
+            ); deleted_count = result.modified_count # Query by _id
         logger.info(f"Successfully {'hard' if hard_delete else 'soft'} deleted {deleted_count} schools"); return deleted_count
     except Exception as e: logger.error(f"Error during bulk school deletion: {e}", exc_info=True); return 0
 
@@ -1952,3 +1954,29 @@ async def get_usage_stats_for_period(
         logger.error(f"Error during usage stats aggregation for teacher {teacher_id}: {e}", exc_info=True)
         return None # Indicate failure
 # <<< END EDIT: Add new analytics CRUD function >>> 
+
+async def get_result_by_id(result_id: uuid.UUID, teacher_id: Optional[str] = None, include_deleted: bool = False, session=None) -> Optional[Result]:
+    """Gets a single result by its own ID, optionally checking teacher_id."""
+    collection = _get_collection(RESULT_COLLECTION)
+    if collection is None: return None
+
+    query = {"_id": result_id}
+    if teacher_id:
+        query["teacher_id"] = teacher_id
+        logger.info(f"Getting result by ID: {result_id} for teacher: {teacher_id}")
+    else:
+        logger.info(f"Getting result by ID: {result_id}")
+    
+    query.update(soft_delete_filter(include_deleted))
+    logger.debug(f"Executing find_one for result by ID with query: {query}")
+    try:
+        result_doc = await collection.find_one(query, session=session)
+        if result_doc:
+            logger.debug(f"Raw result doc from DB by ID: {result_doc}")
+            return Result(**result_doc)
+        else:
+            logger.warning(f"Result {result_id} not found.")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting result by ID {result_id}: {e}", exc_info=True)
+        return None
