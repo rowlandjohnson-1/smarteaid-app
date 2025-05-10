@@ -422,7 +422,7 @@ async def delete_teacher(kinde_id: str, hard_delete: bool = False, session=None)
 # --- REMOVED @with_transaction from create_class_group ---
 async def create_class_group(
     class_group_in: ClassGroupCreate,
-    teacher_id: uuid.UUID, # ADD teacher_id as an argument
+    teacher_id: str, # MODIFIED: Changed type from uuid.UUID to str
     session=None
 ) -> Optional[ClassGroup]:
     """Creates a class group record using data and the provided teacher ID."""

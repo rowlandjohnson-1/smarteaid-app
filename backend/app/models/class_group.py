@@ -9,8 +9,9 @@ class ClassGroupBase(BaseModel):
     """Base class for ClassGroup with common attributes."""
     class_name: str = Field(..., description="Name of the class (e.g., 'Math 101', '9th Grade English')")
     academic_year: str = Field(..., description="Academic year (e.g., '2024-2025')")
+    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this class")
     # school_id: uuid.UUID = Field(..., description="Reference to the School this class belongs to") # REMOVED
-    # teacher_id is handled in DB model
+    # # teacher_id is handled in DB model # REMOVED COMMENT
 
     # Pydantic V2 model config (can be defined here or in inheriting classes)
     model_config = ConfigDict(
@@ -34,7 +35,7 @@ class ClassGroupInDBBase(ClassGroupBase):
 
     # --- RBAC Changes Below ---
     # Changed teacher_id to str to store Kinde User ID
-    teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this class") # MODIFIED
+    # teacher_id: str = Field(..., description="Kinde User ID of the Teacher who owns this class") # MOVED to Base
     is_deleted: bool = Field(default=False, description="Flag for soft delete status") # ADDED
     # school_id is removed (was inherited from Base)
     # --- RBAC Changes Above ---

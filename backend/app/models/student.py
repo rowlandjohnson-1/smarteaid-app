@@ -1,7 +1,7 @@
 # app/models/student.py
 from pydantic import BaseModel, Field, EmailStr, constr, ConfigDict # Import ConfigDict for Pydantic V2, EmailStr
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 # No need to import bool, it's a built-in type
 
@@ -9,6 +9,7 @@ import uuid
 class StudentBase(BaseModel):
     first_name: str = Field(..., min_length=1, description="Student's first name")
     last_name: str = Field(..., min_length=1, description="Student's last name")
+    teacher_id: str = Field(..., description="Kinde User ID of the owning teacher")
 
     # --- ADDED email field ---
     email: Optional[EmailStr] = Field(default=None, description="Student's email address (Optional)")
@@ -33,6 +34,8 @@ class StudentBase(BaseModel):
 class StudentCreate(StudentBase):
     # Inherits fields from StudentBase, including the new optional email
     # teacher_id and is_deleted are NOT needed here - they are set by the backend
+    # MODIFIED COMMENT: teacher_id is now inherited. The logic for how it's set (backend vs. payload)
+    # will be handled by the endpoint and CRUD function.
     pass
 
 # Properties stored in DB - Intermediate Base including system fields
@@ -40,12 +43,12 @@ class StudentInDBBase(StudentBase):
     # Use 'id' in Python, map to '_id' in MongoDB via alias.
     id: uuid.UUID = Field(default_factory=uuid.uuid4, alias="_id", description="Internal unique identifier")
 
-    # Timestamps should be set explicitly by CRUD operations
-    created_at: datetime = Field(..., description="Timestamp when the student record was created")
-    updated_at: datetime = Field(..., description="Timestamp when the student record was last updated")
+    # Timestamps will now use default_factory for automatic generation
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the student record was created")
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp when the student record was last updated")
 
     # --- RBAC Changes Below ---
-    teacher_id: str = Field(..., description="Kinde User ID of the owning teacher") # Added
+    # teacher_id: str = Field(..., description="Kinde User ID of the owning teacher") # MOVED to Base
     is_deleted: bool = Field(default=False, description="Flag for soft delete status") # Added (with default=False)
     # --- RBAC Changes Above ---
 
