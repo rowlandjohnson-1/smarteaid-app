@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
+from pymongo import ReturnDocument
 
 from ..db import crud
 from ..db.database import get_database
@@ -28,7 +29,7 @@ class BatchProcessor:
         self.is_running = True
         try:
             while self.is_running:
-                # Get next batch to process
+                # Get next batch to process (now atomically claims it)
                 batch = await self._get_next_batch()
                 if not batch:
                     # No batches to process, wait before checking again
@@ -36,15 +37,9 @@ class BatchProcessor:
                     continue
 
                 self.current_batch = batch
-                logger.info(f"Processing batch {batch.id}")
+                logger.info(f"Processing batch {batch.id} (claimed atomically)")
 
                 try:
-                    # Update batch status to PROCESSING
-                    await crud.update_batch(
-                        batch_id=batch.id,
-                        batch_in=BatchUpdate(status=BatchStatus.PROCESSING)
-                    )
-
                     # Get all documents in the batch
                     self.current_documents = await crud.get_documents_by_batch_id(batch_id=batch.id)
                     
@@ -96,34 +91,52 @@ class BatchProcessor:
             self.is_running = False
 
     async def _get_next_batch(self) -> Optional[Batch]:
-        """Get the next batch to process based on priority and creation time."""
+        """
+        Atomically find the next batch in QUEUED status, update its status
+        to PROCESSING, and return it. Ordered by priority and creation time.
+        """
         try:
-            # Get database instance
             db = get_database()
             if db is None:
-                logger.error("Database connection not available")
+                logger.error("Database connection not available for getting next batch.")
                 return None
 
-            # Find batches in QUEUED status, ordered by priority and creation time
-            pipeline = [
-                {"$match": {"status": BatchStatus.QUEUED}},
-                {"$sort": {"priority": -1, "created_at": 1}},
-                {"$limit": 1}
-            ]
-            
-            logger.info(f"Executing batch query pipeline: {pipeline}")
-            
-            # Get collection and check indexes
             collection = db.batches
-            indexes = await collection.list_indexes().to_list(length=None)
-            logger.info(f"Available indexes on batches collection: {indexes}")
             
-            async for batch_dict in collection.aggregate(pipeline):
-                return Batch(**batch_dict)
-            
-            return None
+            # Define the query filter for finding a queued batch
+            query_filter = {"status": BatchStatus.QUEUED.value}
+
+            # Define the update to set status to PROCESSING and update timestamp
+            # Use timezone.utc for consistency
+            update_doc = {
+                "$set": {
+                    "status": BatchStatus.PROCESSING.value,
+                    "updated_at": datetime.now(timezone.utc) 
+                }
+            }
+
+            # Define the sort order
+            sort_order = [("priority", -1), ("created_at", 1)]
+
+            logger.debug(f"Attempting to find and claim next batch with filter: {query_filter}, sort: {sort_order}")
+
+            # Atomically find one document, update it, and return the updated document
+            updated_batch_dict = await collection.find_one_and_update(
+                filter=query_filter,
+                update=update_doc,
+                sort=sort_order,
+                return_document=ReturnDocument.AFTER
+            )
+
+            if updated_batch_dict:
+                logger.info(f"Atomically claimed batch {updated_batch_dict['_id']} for processing.")
+                return Batch(**updated_batch_dict) 
+            else:
+                logger.debug("No QUEUED batches found to process.")
+                return None
+
         except Exception as e:
-            logger.error(f"Error getting next batch: {e}", exc_info=True)
+            logger.error(f"Error getting next batch atomically: {e}", exc_info=True)
             return None
 
     async def _process_document(self, document: Document) -> bool:
