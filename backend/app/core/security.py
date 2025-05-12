@@ -37,7 +37,7 @@ import logging
 import httpx # Changed from requests
 from typing import Dict, Any, Optional
 from functools import lru_cache
-from datetime import datetime # Needed for cache info timestamp
+from datetime import datetime, timedelta, timezone # Added timezone and timedelta
 
 # --- JOSE & JWT Imports ---
 from jose import jwt, exceptions as jose_exceptions
@@ -85,20 +85,27 @@ if KINDE_DOMAIN:
 else:
     logger.error("KINDE_DOMAIN is not configured. Cannot determine JWKS URL.")
 
+# --- Manual Cache for JWKS ---
+_jwks_cache: Optional[Dict[str, Any]] = None
+_jwks_cache_timestamp: Optional[datetime] = None
+JWKS_CACHE_TTL = timedelta(hours=1) # Cache JWKS for 1 hour
+# --- End Manual Cache --- 
 
-@lru_cache(maxsize=1) # Cache only the most recent JWKS result
-async def get_jwks() -> Dict[str, Any]: # Changed to async def
+# @lru_cache(maxsize=1) # REMOVED: lru_cache is not directly compatible with async def for this use case
+async def get_jwks() -> Dict[str, Any]:
     """
     Fetches the JWKS keys from the Kinde instance's well-known endpoint.
-    Uses lru_cache for simple in-memory caching. Raises JWKSFetchError on failure.
+    Uses a simple time-based in-memory cache. Raises JWKSFetchError on failure.
     Now uses httpx for asynchronous requests.
-
-    Returns:
-        The JWKS dictionary containing the keys.
-
-    Raises:
-        JWKSFetchError: If fetching or parsing fails, or config is missing.
     """
+    global _jwks_cache, _jwks_cache_timestamp
+
+    # Check cache validity
+    if _jwks_cache and _jwks_cache_timestamp and \
+       (datetime.now(timezone.utc) - _jwks_cache_timestamp < JWKS_CACHE_TTL):
+        logger.info(f"Returning JWKS from cache (timestamp: {_jwks_cache_timestamp}, TTL: {JWKS_CACHE_TTL}).")
+        return _jwks_cache
+
     if not JWKS_URL:
         err_msg = "Cannot fetch JWKS: JWKS URL is not configured (KINDE_DOMAIN missing?)."
         logger.error(err_msg)
@@ -114,7 +121,9 @@ async def get_jwks() -> Dict[str, Any]: # Changed to async def
             if "keys" not in jwks or not isinstance(jwks["keys"], list):
                 raise JWKSFetchError("Invalid JWKS format received: \'keys\' array not found.")
 
-            logger.info(f"Successfully fetched and cached {len(jwks['keys'])} JWKS keys.")
+            logger.info(f"Successfully fetched {len(jwks['keys'])} JWKS keys. Updating cache.")
+            _jwks_cache = jwks # Store result in cache
+            _jwks_cache_timestamp = datetime.now(timezone.utc) # Update timestamp
             return jwks
 
     except httpx.TimeoutException as e:
@@ -255,15 +264,26 @@ async def get_current_user_payload( # Already async, which is good
 
 def clear_jwks_cache():
     """Clears the JWKS cache, forcing a fresh fetch on the next call to get_jwks."""
-    get_jwks.cache_clear()
-    logger.info("JWKS cache cleared.")
+    # get_jwks.cache_clear() # REMOVED: No longer using lru_cache on get_jwks directly
+    global _jwks_cache, _jwks_cache_timestamp
+    _jwks_cache = None
+    _jwks_cache_timestamp = None
+    logger.info("Manually cleared JWKS cache.")
 
 def get_jwks_cache_info() -> Dict[str, Any]:
-    """Gets information about the current JWKS cache state (from lru_cache)."""
-    cache_info = get_jwks.cache_info()
+    """Gets information about the current JWKS cache state (manual cache)."""
+    # cache_info = get_jwks.cache_info() # REMOVED
+    # return {
+    #     "hits": cache_info.hits,
+    #     "misses": cache_info.misses,
+    #     "maxsize": cache_info.maxsize,
+    #     "currsize": cache_info.currsize,
+    # }
+    global _jwks_cache, _jwks_cache_timestamp
     return {
-        "hits": cache_info.hits,
-        "misses": cache_info.misses,
-        "maxsize": cache_info.maxsize,
-        "currsize": cache_info.currsize,
+        "cached": _jwks_cache is not None,
+        "timestamp": _jwks_cache_timestamp.isoformat() if _jwks_cache_timestamp else None,
+        "expires_in_seconds": (JWKS_CACHE_TTL - (datetime.now(timezone.utc) - _jwks_cache_timestamp)).total_seconds() 
+                               if _jwks_cache and _jwks_cache_timestamp else None,
+        "ttl_seconds": JWKS_CACHE_TTL.total_seconds()
     }

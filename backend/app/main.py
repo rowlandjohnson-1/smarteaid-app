@@ -8,6 +8,7 @@ from typing import Dict, Any
 from datetime import datetime, timedelta, timezone # For uptime calculation
 import asyncio
 from fastapi import status
+from pymongo.errors import OperationFailure
 
 # Import config and database lifecycle functions
 # Adjust path '.' based on where main.py is relative to 'core' and 'db'
@@ -80,17 +81,36 @@ async def startup_event():
         # Ensure indexes after successful connection
         try:
             db_instance = get_database()
-            if db_instance:
+            if db_instance is not None:
                 logger.info("Ensuring database indexes...")
                 # Index for teachers.kinde_id
                 # Use the collection name string directly as defined in crud.py or your DB
                 teachers_collection_name = "teachers" 
                 teachers_collection = db_instance.get_collection(teachers_collection_name)
                 
-                # Create index on kinde_id, make it unique
-                # Naming the index is good practice for manageability
-                await teachers_collection.create_index("kinde_id", name="idx_teacher_kinde_id", unique=True)
-                logger.info(f"Index 'idx_teacher_kinde_id' on {teachers_collection_name}.kinde_id ensured (unique).")
+                try:
+                    # Create index on kinde_id, make it unique
+                    # Naming the index is good practice for manageability
+                    await teachers_collection.create_index("kinde_id", name="idx_teacher_kinde_id", unique=True)
+                    logger.info(f"Index 'idx_teacher_kinde_id' on {teachers_collection_name}.kinde_id ensured (unique).")
+                except OperationFailure as e:
+                    if e.code == 67: # Code 67: CannotCreateIndex (Cosmos DB specific for unique on non-empty)
+                        logger.warning(
+                            f"Could not create unique index 'idx_teacher_kinde_id' on {teachers_collection_name}.kinde_id "
+                            f"programmatically because the collection is not empty (Cosmos DB restriction). "
+                            f"Please ensure this index is created manually in Azure Portal if it does not exist. Error: {e.details}"
+                        )
+                    elif e.code == 13: # Code 13: Unauthorized - Cosmos DB index modification restriction
+                        logger.warning(
+                            f"Could not modify existing unique index 'idx_teacher_kinde_id' on {teachers_collection_name}.kinde_id. "
+                            f"Cosmos DB requires removing and recreating the collection to change unique indexes. "
+                            f"Ignoring error and continuing startup. Error details: {e.details}"
+                        )
+                    else: # Other OperationFailure, re-raise or log as more critical
+                        logger.error(f"Database OperationFailure while creating index 'idx_teacher_kinde_id': {e}", exc_info=True)
+                        # Potentially re-raise if this should halt startup
+                except Exception as e_general: # Catch other general errors during index creation
+                    logger.error(f"Unexpected error creating index 'idx_teacher_kinde_id': {e_general}", exc_info=True)
                 
                 # Example for other potential indexes (uncomment and adapt as needed):
                 # documents_collection_name = "documents"

@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from azure.core.exceptions import ResourceNotFoundError 
 import os
 import calendar
+from fastapi import HTTPException # Import HTTPException
 
 # --- Database Access ---
 from .database import get_database
@@ -226,8 +227,23 @@ async def create_teacher(
     else:
         logger.warning("create_teacher called WITHOUT an active session (transaction decorator removed/disabled).")
 
-    collection = _get_collection(TEACHER_COLLECTION); now = datetime.now(timezone.utc)
-    if collection is None: return None
+    collection = _get_collection(TEACHER_COLLECTION)
+    now = datetime.now(timezone.utc) # Define now here as it's used multiple times
+    if collection is None: 
+        logger.error("Teacher collection not found.")
+        # Consider raising an exception or returning a more specific error response
+        return None
+
+    # --- Application-level uniqueness check for kinde_id ---
+    existing_teacher_count = await collection.count_documents({"kinde_id": kinde_id, "is_deleted": {"$ne": True}}, session=session)
+    if existing_teacher_count > 0:
+        logger.warning(f"Attempted to create a teacher with an existing kinde_id: {kinde_id}")
+        # It's often better to raise an HTTPException here that can be caught by FastAPI
+        # and returned as a proper HTTP error response (e.g., 409 Conflict).
+        # For now, returning None as per existing pattern, but consider changing.
+        # raise HTTPException(status_code=409, detail=f"A teacher with Kinde ID '{kinde_id}' already exists.")
+        return None 
+    # --- End uniqueness check ---
 
     # Generate a new internal UUID for the teacher record (_id)
     internal_id = uuid.uuid4()
@@ -238,7 +254,9 @@ async def create_teacher(
     teacher_doc["kinde_id"] = kinde_id    # Add the Kinde ID
 
     # Set timestamps and soft delete status
-    teacher_doc["created_at"] = now; teacher_doc["updated_at"] = now; teacher_doc["is_deleted"] = False
+    teacher_doc["created_at"] = now
+    teacher_doc["updated_at"] = now
+    teacher_doc["is_deleted"] = False
 
     # Ensure defaults from TeacherBase are applied if not explicitly in TeacherCreate dump
     # Pydantic v2 model_dump includes defaults by default
@@ -248,35 +266,37 @@ async def create_teacher(
     if isinstance(teacher_doc.get("how_did_you_hear"), MarketingSource):
         teacher_doc["how_did_you_hear"] = teacher_doc["how_did_you_hear"].value # Store the string value
     if "is_active" not in teacher_doc: # Ensure default is set if not present
-        teacher_doc["is_active"] = True
+        teacher_doc["is_active"] = True # Assuming default is True, adjust if needed
+    if "email_verified" not in teacher_doc:
+        teacher_doc["email_verified"] = False # Assuming default, adjust if needed
+    # Add other defaults as necessary based on TeacherBase or Teacher model
 
-    logger.info(f"Inserting teacher with internal ID: {internal_id}, Kinde ID: {kinde_id}")
+    logger.info(f"Attempting to insert new teacher with internal_id: {internal_id}, kinde_id: {kinde_id}")
     try:
-        # Insert the document into the collection (pass session if available)
         inserted_result = await collection.insert_one(teacher_doc, session=session)
-    except DuplicateKeyError:
-        # This assumes you have a unique index on 'kinde_id'
-        logger.warning(f"Teacher record with Kinde ID {kinde_id} already exists.")
-        # Fetch and return existing record instead of failing
-        return await get_teacher_by_kinde_id(kinde_id=kinde_id, session=session)
-    except Exception as e:
-        # Handle other potential database errors
-        logger.error(f"Error inserting teacher: {e}", exc_info=True); return None
-
-    # Verify insertion and fetch the created document using the internal ID
-    if inserted_result.acknowledged:
-        # Fetch outside the transaction if session is None, or use session if provided
-        created_doc = await collection.find_one({"_id": internal_id}, session=session)
-        if created_doc:
-            # Convert _id to string BEFORE Pydantic validation if it's a UUID
-            if isinstance(created_doc.get("_id"), uuid.UUID):
-                logger.debug(f"Converting created_doc _id {created_doc['_id']} to string for Pydantic in create_teacher.")
-                created_doc["_id"] = str(created_doc["_id"])
-            return Teacher(**created_doc) # Pydantic will handle the _id to id mapping
+        if inserted_result.acknowledged:
+            # Fetch the newly created document to return it
+            # Use the internal_id for fetching
+            created_doc = await collection.find_one({"_id": internal_id, "is_deleted": {"$ne": True}}, session=session)
+            if created_doc:
+                logger.info(f"Successfully created teacher: {internal_id} / {kinde_id}")
+                return Teacher(**created_doc) 
+            else:
+                logger.error(f"Failed to retrieve teacher after insert, internal_id: {internal_id}")
+                return None
         else:
-            logger.error(f"Failed retrieve teacher post-insert: internal ID {internal_id}"); return None
-    else:
-        logger.error(f"Insert teacher not acknowledged: internal ID {internal_id}"); return None
+            logger.error(f"Insert not acknowledged for teacher with kinde_id: {kinde_id}, internal_id: {internal_id}")
+            return None
+    except DuplicateKeyError as e:
+        # This handles the database-level unique index violation, which is a good safety net.
+        # The app-level check above should ideally prevent this, but this catch is still valuable.
+        logger.error(f"Database-level DuplicateKeyError for kinde_id '{kinde_id}' or _id '{internal_id}': {e.details}", exc_info=True)
+        # Again, consider raising HTTPException for a 409 Conflict
+        # raise HTTPException(status_code=409, detail=f"A teacher with this Kinde ID or internal ID already exists (DB constraint).")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error creating teacher with kinde_id {kinde_id}: {e}", exc_info=True)
+        return None
 
 async def get_teacher_by_id(teacher_id: str, session=None) -> Optional[Teacher]:
     """Get a single teacher by their internal ID (string UUID)."""
