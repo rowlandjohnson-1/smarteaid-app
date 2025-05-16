@@ -20,7 +20,35 @@ import logging # <-- ADD logging IMPORT
 import time
 from typing import Dict, Any, AsyncGenerator
 from pytest_mock import MockerFixture # <-- ADD MockerFixture IMPORT
+from unittest.mock import AsyncMock, patch # MODIFIED: Added patch
 
+# Setup logger for conftest early
+logger = logging.getLogger(__name__)
+
+# --- Global Patcher for Blob Storage ---
+# Applied via pytest_configure to ensure it's active before most module imports
+blob_uploader_patcher = None
+
+def pytest_configure(config):
+    """Apply global mocks before test collection and most module imports."""
+    global blob_uploader_patcher
+    logger.info("pytest_configure: Patching app.services.blob_storage.upload_file_to_blob globally.")
+    # Ensure the target string is exactly how it's imported in the module to be tested
+    blob_uploader_patcher = patch('app.services.blob_storage.upload_file_to_blob', new_callable=AsyncMock)
+    mock_blob_uploader = blob_uploader_patcher.start()
+    # Set a default return value; tests can override this if needed by accessing the mock
+    mock_blob_uploader.return_value = "conftest_default_blob.pdf"
+
+def pytest_unconfigure(config):
+    """Stop global mocks after tests are done."""
+    global blob_uploader_patcher
+    if blob_uploader_patcher:
+        logger.info("pytest_unconfigure: Stopping global patch for app.services.blob_storage.upload_file_to_blob.")
+        blob_uploader_patcher.stop()
+        blob_uploader_patcher = None
+# --- End Global Patcher ---
+
+# Now, other imports that might trigger loading of application modules
 # --- START: Add project root to sys.path ---
 # This helps ensure modules like 'backend' can be found
 # Use Path for better cross-platform compatibility
@@ -38,39 +66,19 @@ if str(backend_root) not in sys.path:
 
 # --- Import App and Settings ---
 try:
-    from backend.app.main import app as fastapi_app # Keep alias
+    # REMOVED: from backend.app.main import app as fastapi_app
     from backend.app.core.config import settings # Import settings
     from app.core.security import get_current_user_payload
-    print("Successfully imported \'app\' and \'settings\' from backend modules")
+    print("Successfully imported 'settings' and 'get_current_user_payload' from backend modules") # UPDATED message
 except ImportError as e:
     print(f"Error importing backend modules: {e}")
-    # Define dummy app and settings to allow tests to load
-    fastapi_app = FastAPI(title="Dummy App for Test Loading")
+    # Define dummy settings to allow tests to load if main settings fail
+    # REMOVED: fastapi_app = FastAPI(title="Dummy App for Test Loading")
     class DummySettings:
         DB_NAME = "dummy_db"
         MONGODB_URL = None
     settings = DummySettings()
 # --------------------------------
-
-# Setup logger for conftest
-logger = logging.getLogger(__name__)
-
-# Remove custom event_loop fixture - rely on pytest-asyncio
-# @pytest.fixture(scope="session")
-# def event_loop():
-#     """
-#     Creates an event loop for the test session.
-#     Needed by pytest-asyncio for session-scoped async fixtures.
-#     """
-#     # ... (implementation removed)
-
-# Remove sync TestClient fixture - rely on pytest-httpx and app fixture
-# @pytest.fixture(scope="module")
-# def client():
-#     """
-#     Provides a FastAPI TestClient instance for making requests to the app.
-#     """
-#     # ... (implementation removed)
 
 # --- Import lifecycle functions to mock ---
 # Assuming these are the correct paths based on main.py
@@ -96,6 +104,13 @@ async def app(mocker: MockerFixture) -> AsyncGenerator[FastAPI, None]:
     # Mock batch processor methods on the instance imported into main.py
     mocker.patch('backend.app.main.batch_processor.process_batches', return_value=None)
     mocker.patch('backend.app.main.batch_processor.stop', return_value=None)
+
+    # REMOVED: Mock for blob storage service upload_file_to_blob is now handled globally by pytest_configure
+    # mocker.patch(
+    #     'app.services.blob_storage.upload_file_to_blob', # String path to the function
+    #     new_callable=AsyncMock, 
+    #     return_value="default_conftest_blob.pdf" # Default return, test can override if needed
+    # )
     # --- End Mocking --- 
 
     # Import the app *after* patching dependencies
@@ -192,7 +207,7 @@ async def app_with_mock_auth(app: FastAPI) -> FastAPI:
 
 # --- Pytest-httpx Diagnostic Hook --- (Keep if pytest-httpx is ever re-enabled)
 # def pytest_report_header(config):
-#     """Add pytest-httpx version and path to report header."""
+#     """Add pytest-httpx version and path to report header.""" 
 #     try:
 #         import pytest_httpx
 #         version = getattr(pytest_httpx, "__version__", "unknown")
