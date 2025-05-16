@@ -218,84 +218,69 @@ async def create_teacher(
     session=None
 ) -> Optional[Teacher]:
     """
-    Creates a teacher record, linking it to a Kinde ID.
-    Uses data from TeacherCreate model (typically called by webhook/backend process).
+    Creates a teacher record, using the Kinde ID as the primary document ID (_id).
+    Uses data from TeacherCreate model.
     """
-    # If not using transaction, session will be None here
     if session:
         logger.debug("create_teacher called within an existing session.")
     else:
         logger.warning("create_teacher called WITHOUT an active session (transaction decorator removed/disabled).")
 
     collection = _get_collection(TEACHER_COLLECTION)
-    now = datetime.now(timezone.utc) # Define now here as it's used multiple times
+    now = datetime.now(timezone.utc)
     if collection is None: 
         logger.error("Teacher collection not found.")
-        # Consider raising an exception or returning a more specific error response
         return None
 
-    # --- Application-level uniqueness check for kinde_id ---
-    existing_teacher_count = await collection.count_documents({"kinde_id": kinde_id, "is_deleted": {"$ne": True}}, session=session)
+    # --- Application-level uniqueness check for _id (which will be the kinde_id) ---
+    # Note: MongoDB enforces _id uniqueness at the DB level, but an early check can be useful.
+    existing_teacher_count = await collection.count_documents({"_id": kinde_id, "is_deleted": {"$ne": True}}, session=session)
     if existing_teacher_count > 0:
-        logger.warning(f"Attempted to create a teacher with an existing kinde_id: {kinde_id}")
-        # It's often better to raise an HTTPException here that can be caught by FastAPI
-        # and returned as a proper HTTP error response (e.g., 409 Conflict).
-        # For now, returning None as per existing pattern, but consider changing.
-        # raise HTTPException(status_code=409, detail=f"A teacher with Kinde ID '{kinde_id}' already exists.")
+        logger.warning(f"Attempted to create a teacher with an existing Kinde ID (as _id): {kinde_id}")
+        # Consider raising HTTPException(status_code=409, detail=...)
         return None 
     # --- End uniqueness check ---
 
-    # Generate a new internal UUID for the teacher record (_id)
-    internal_id = uuid.uuid4()
-
     # Create the document to insert using data from TeacherCreate
-    teacher_doc = teacher_in.model_dump() # Dump all fields from TeacherCreate
-    teacher_doc["_id"] = internal_id      # Set internal DB ID
-    teacher_doc["kinde_id"] = kinde_id    # Add the Kinde ID
+    teacher_doc = teacher_in.model_dump()
+    teacher_doc["_id"] = kinde_id      # Set Kinde ID as the document's primary key (_id)
+    # No separate kinde_id field needed in the document now
 
     # Set timestamps and soft delete status
     teacher_doc["created_at"] = now
     teacher_doc["updated_at"] = now
     teacher_doc["is_deleted"] = False
 
-    # Ensure defaults from TeacherBase are applied if not explicitly in TeacherCreate dump
-    # Pydantic v2 model_dump includes defaults by default
-    # We might need explicit conversion for enums if use_enum_values=False in model
+    # Ensure defaults from TeacherBase are applied
     if isinstance(teacher_doc.get("role"), TeacherRole):
-        teacher_doc["role"] = teacher_doc["role"].value # Store the string value
+        teacher_doc["role"] = teacher_doc["role"].value
     if isinstance(teacher_doc.get("how_did_you_hear"), MarketingSource):
-        teacher_doc["how_did_you_hear"] = teacher_doc["how_did_you_hear"].value # Store the string value
-    if "is_active" not in teacher_doc: # Ensure default is set if not present
-        teacher_doc["is_active"] = True # Assuming default is True, adjust if needed
+        teacher_doc["how_did_you_hear"] = teacher_doc["how_did_you_hear"].value
+    if "is_active" not in teacher_doc:
+        teacher_doc["is_active"] = True 
     if "email_verified" not in teacher_doc:
-        teacher_doc["email_verified"] = False # Assuming default, adjust if needed
-    # Add other defaults as necessary based on TeacherBase or Teacher model
+        teacher_doc["email_verified"] = False
 
-    logger.info(f"Attempting to insert new teacher with internal_id: {internal_id}, kinde_id: {kinde_id}")
+    logger.info(f"Attempting to insert new teacher with _id (Kinde ID): {kinde_id}")
     try:
         inserted_result = await collection.insert_one(teacher_doc, session=session)
         if inserted_result.acknowledged:
-            # Fetch the newly created document to return it
-            # Use the internal_id for fetching
-            created_doc = await collection.find_one({"_id": internal_id, "is_deleted": {"$ne": True}}, session=session)
+            # Fetch the newly created document using the kinde_id (which is now _id)
+            created_doc = await collection.find_one({"_id": kinde_id, "is_deleted": {"$ne": True}}, session=session)
             if created_doc:
-                logger.info(f"Successfully created teacher: {internal_id} / {kinde_id}")
+                logger.info(f"Successfully created teacher with _id (Kinde ID): {kinde_id}")
                 return Teacher(**created_doc) 
             else:
-                logger.error(f"Failed to retrieve teacher after insert, internal_id: {internal_id}")
+                logger.error(f"Failed to retrieve teacher after insert, _id (Kinde ID): {kinde_id}")
                 return None
         else:
-            logger.error(f"Insert not acknowledged for teacher with kinde_id: {kinde_id}, internal_id: {internal_id}")
+            logger.error(f"Insert not acknowledged for teacher with _id (Kinde ID): {kinde_id}")
             return None
     except DuplicateKeyError as e:
-        # This handles the database-level unique index violation, which is a good safety net.
-        # The app-level check above should ideally prevent this, but this catch is still valuable.
-        logger.error(f"Database-level DuplicateKeyError for kinde_id '{kinde_id}' or _id '{internal_id}': {e.details}", exc_info=True)
-        # Again, consider raising HTTPException for a 409 Conflict
-        # raise HTTPException(status_code=409, detail=f"A teacher with this Kinde ID or internal ID already exists (DB constraint).")
+        logger.error(f"Database-level DuplicateKeyError for _id (Kinde ID) '{kinde_id}': {e.details}", exc_info=True)
         return None
     except Exception as e:
-        logger.error(f"Unexpected error creating teacher with kinde_id {kinde_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error creating teacher with _id (Kinde ID) {kinde_id}: {e}", exc_info=True)
         return None
 
 async def get_teacher_by_id(teacher_id: str, session=None) -> Optional[Teacher]:

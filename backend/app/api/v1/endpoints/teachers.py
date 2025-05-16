@@ -69,6 +69,60 @@ async def read_current_user_profile(
             detail="Teacher profile not found. Please complete your profile." # Keep message consistent with frontend expectation
         )
 
+# --- GET /teachers/{teacher_kinde_id} endpoint (Admin Only) ---
+@router.get(
+    "/{teacher_kinde_id_to_fetch}", # Path parameter for the Kinde ID of the teacher to fetch
+    response_model=Teacher,
+    status_code=status.HTTP_200_OK,
+    summary="Get specific teacher profile by Kinde ID (Admin Only)",
+    description=(
+        "Retrieves the profile of a specific teacher identified by their Kinde ID. "
+        "Requires administrator privileges."
+    ),
+    responses={
+        403: {"description": "User does not have admin privileges"},
+        404: {"description": "Teacher profile not found for the given Kinde ID"},
+    }
+)
+async def read_teacher_by_id_as_admin(
+    teacher_kinde_id_to_fetch: str, # The Kinde ID from the path
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    """
+    Admin-only endpoint to retrieve a specific teacher's profile by their Kinde ID.
+    """
+    requesting_user_kinde_id = current_user_payload.get("sub")
+    requesting_user_roles = current_user_payload.get("roles", [])
+
+    logger.info(
+        f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) attempting to fetch profile for Kinde ID: {teacher_kinde_id_to_fetch}"
+    )
+
+    # Authorization check: Only allow users with the "admin" role
+    if "admin" not in requesting_user_roles:
+        logger.warning(
+            f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) denied access to fetch teacher {teacher_kinde_id_to_fetch} (requires admin role)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource."
+        )
+
+    logger.info(f"Admin user {requesting_user_kinde_id} granted access to fetch teacher {teacher_kinde_id_to_fetch}.")
+
+    # Fetch the teacher using the Kinde ID from the path
+    teacher = await crud.get_teacher_by_kinde_id(kinde_id=teacher_kinde_id_to_fetch)
+
+    if teacher:
+        logger.info(f"Successfully fetched teacher profile for Kinde ID: {teacher_kinde_id_to_fetch}")
+        return teacher
+    else:
+        logger.warning(f"Teacher profile not found for Kinde ID: {teacher_kinde_id_to_fetch} when requested by admin {requesting_user_kinde_id}.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Teacher profile not found for Kinde ID: {teacher_kinde_id_to_fetch}"
+        )
+
 # --- PUT /me endpoint (Update or Create - Upsert Logic - CORRECTED for User Version) ---
 @router.put(
     "/me",
@@ -220,6 +274,84 @@ async def update_or_create_current_user_profile(
             # Check for specific DB errors if possible, otherwise return generic 500
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while creating the teacher profile.")
 
+# --- PUT /teachers/{teacher_kinde_id_to_update} endpoint (Admin Only) ---
+@router.put(
+    "/{teacher_kinde_id_to_update}",
+    response_model=Teacher,
+    status_code=status.HTTP_200_OK,
+    summary="Update a specific teacher's profile by Kinde ID (Admin Only)",
+    description=(
+        "Updates the profile of a specific teacher identified by their Kinde ID. "
+        "Requires administrator privileges."
+    ),
+    responses={
+        403: {"description": "User does not have admin privileges"},
+        404: {"description": "Teacher profile not found for the given Kinde ID to update"},
+        422: {"description": "Validation Error in request body"},
+        500: {"description": "Internal server error during profile update"},
+    }
+)
+async def update_teacher_by_id_as_admin(
+    teacher_kinde_id_to_update: str, # The Kinde ID from the path of the teacher to update
+    teacher_update_data: TeacherUpdate,    # The update data from the request body
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    """
+    Admin-only endpoint to update a specific teacher's profile by their Kinde ID.
+    """
+    requesting_user_kinde_id = current_user_payload.get("sub")
+    requesting_user_roles = current_user_payload.get("roles", [])
+
+    logger.info(
+        f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) attempting to update profile for Kinde ID: {teacher_kinde_id_to_update}"
+    )
+    logger.debug(f"Admin update payload for {teacher_kinde_id_to_update}: {teacher_update_data.model_dump(exclude_unset=True)}")
+
+    # 1. Authorization check: Only allow users with the "admin" role
+    if "admin" not in requesting_user_roles:
+        logger.warning(
+            f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) denied attempt to update teacher {teacher_kinde_id_to_update} (requires admin role)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action."
+        )
+
+    logger.info(f"Admin user {requesting_user_kinde_id} granted access to update teacher {teacher_kinde_id_to_update}.")
+
+    # 2. Check if the target teacher profile exists
+    # This step is implicitly handled by crud.update_teacher if it returns None for non-existent IDs,
+    # but an explicit check can provide a clearer 404 before attempting an update.
+    # However, to align with how PUT /me and other updates might work, we can rely on crud.update_teacher
+    # to handle the "not found" case if it's designed to do so (e.g., by returning None).
+    # For robustness, an explicit check is often better if crud.update_teacher doesn't distinguish between "not found" and "update failed for other reasons".
+    # Let's assume crud.update_teacher will be called and its return value checked.
+
+    # 3. Perform the update using the CRUD function
+    # Ensure crud.update_teacher can accept a kinde_id to identify the teacher and TeacherUpdate model.
+    try:
+        updated_teacher = await crud.update_teacher(
+            kinde_id=teacher_kinde_id_to_update, 
+            teacher_in=teacher_update_data
+        )
+
+        if updated_teacher is None:
+            # This means the teacher was not found by crud.update_teacher or another issue occurred.
+            logger.warning(f"Admin update failed: Teacher profile not found for Kinde ID: {teacher_kinde_id_to_update} (or update returned None).")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail=f"Teacher profile with Kinde ID '{teacher_kinde_id_to_update}' not found or update failed."
+            )
+
+        logger.info(f"Teacher profile for Kinde ID {teacher_kinde_id_to_update} updated successfully by admin {requesting_user_kinde_id}.")
+        return updated_teacher
+
+    except ValidationError as e:
+        logger.error(f"Pydantic validation error during admin update for Kinde ID {teacher_kinde_id_to_update}: {e.errors()}", exc_info=False)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
+    except Exception as e:
+        logger.error(f"CRUD update_teacher failed for Kinde ID {teacher_kinde_id_to_update} during admin update: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update teacher profile due to a server error.")
 
 # --- POST / Endpoint ---
 # (Code remains the same as user provided)
@@ -305,15 +437,7 @@ async def create_new_teacher(
     return created_teacher
 
 
-# --- PUT /me Endpoint for Updating Profile (Now handled by update_or_create_current_user_profile) ---
-# This specific function is replaced by the upsert logic above.
-# Keeping the original signature here for reference if needed, but it's effectively replaced.
-# @router.put(...)
-# async def update_current_user_profile(...): ...
-
-
 # --- GET / Endpoint (List all teachers - likely admin only) ---
-# (Code remains the same as user provided)
 @router.get(
     "/",
     response_model=List[Teacher],
@@ -327,9 +451,19 @@ async def read_teachers(
     current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
 ):
     user_kinde_id = current_user_payload.get("sub")
-    logger.info(f"User {user_kinde_id} attempting to read list of teachers (skip={skip}, limit={limit}).")
-    # TODO: Add authorization check - Only allow admins?
+    user_roles = current_user_payload.get("roles", [])
 
+    logger.info(f"User {user_kinde_id} (Roles: {user_roles}) attempting to read list of teachers (skip={skip}, limit={limit}).")
+
+    # Authorization check: Only allow users with the "admin" role
+    if "admin" not in user_roles:
+        logger.warning(f"User {user_kinde_id} (Roles: {user_roles}) denied access to list all teachers (requires admin role).")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this resource."
+        )
+    
+    logger.info(f"Admin user {user_kinde_id} granted access to list teachers.")
     teachers = await crud.get_all_teachers(skip=skip, limit=limit)
     return teachers
 
@@ -375,3 +509,78 @@ async def delete_current_user_profile(
     logger.info(f"Teacher profile for Kinde ID {user_kinde_id_str} deleted successfully.")
     # Return None for 204 No Content response
     return None
+
+# --- DELETE /teachers/{teacher_kinde_id_to_delete} endpoint (Admin Only) ---
+@router.delete(
+    "/{teacher_kinde_id_to_delete}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a specific teacher's profile by Kinde ID (Admin Only)",
+    description=(
+        "Deletes the profile of a specific teacher identified by their Kinde ID. "
+        "Requires administrator privileges."
+    ),
+    responses={
+        403: {"description": "User does not have admin privileges"},
+        404: {"description": "Teacher profile not found for the given Kinde ID to delete"},
+        500: {"description": "Internal server error during profile deletion"},
+    }
+)
+async def delete_teacher_by_id_as_admin(
+    teacher_kinde_id_to_delete: str, # The Kinde ID from the path of the teacher to delete
+    current_user_payload: Dict[str, Any] = Depends(get_current_user_payload)
+):
+    """
+    Admin-only endpoint to delete a specific teacher's profile by their Kinde ID.
+    """
+    requesting_user_kinde_id = current_user_payload.get("sub")
+    requesting_user_roles = current_user_payload.get("roles", [])
+
+    logger.info(
+        f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) attempting to delete profile for Kinde ID: {teacher_kinde_id_to_delete}"
+    )
+
+    # 1. Authorization check: Only allow users with the "admin" role
+    if "admin" not in requesting_user_roles:
+        logger.warning(
+            f"User {requesting_user_kinde_id} (Roles: {requesting_user_roles}) denied attempt to delete teacher {teacher_kinde_id_to_delete} (requires admin role)."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action."
+        )
+
+    logger.info(f"Admin user {requesting_user_kinde_id} granted access to delete teacher {teacher_kinde_id_to_delete}.")
+
+    # 2. Perform the delete using the CRUD function
+    # Ensure crud.delete_teacher can accept a kinde_id to identify the teacher.
+    # It should return True if deletion was successful, False otherwise (e.g., if not found).
+    try:
+        # First, check if the teacher exists to provide a more specific 404 if needed.
+        # (Though crud.delete_teacher might handle this, explicit check is clearer)
+        teacher_to_delete = await crud.get_teacher_by_kinde_id(kinde_id=teacher_kinde_id_to_delete)
+        if not teacher_to_delete:
+            logger.warning(f"Admin delete failed: Teacher profile not found for Kinde ID: {teacher_kinde_id_to_delete}.")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Teacher profile with Kinde ID '{teacher_kinde_id_to_delete}' not found."
+            )
+        
+        deleted_successfully = await crud.delete_teacher(kinde_id=teacher_kinde_id_to_delete)
+
+        if not deleted_successfully:
+            # This might occur if the record disappeared between check and delete, or another issue.
+            logger.error(f"Admin delete operation for Kinde ID {teacher_kinde_id_to_delete} returned False from CRUD, but teacher was found prior.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete teacher profile for Kinde ID '{teacher_kinde_id_to_delete}' due to an unexpected issue after existence check."
+            )
+
+        logger.info(f"Teacher profile for Kinde ID {teacher_kinde_id_to_delete} deleted successfully by admin {requesting_user_kinde_id}.")
+        # For 204 No Content, FastAPI expects no return body.
+        return None # Or return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    except HTTPException: # Re-raise known HTTPExceptions (like the 404 above)
+        raise
+    except Exception as e:
+        logger.error(f"CRUD delete_teacher failed for Kinde ID {teacher_kinde_id_to_delete} during admin delete: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete teacher profile due to a server error.")
